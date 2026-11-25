@@ -24,7 +24,6 @@ function normalizeRecipeInput(input = {}) {
     prepTime: asText(input.prepTime),
     cookTime: asText(input.cookTime),
     servings: asText(input.servings),
-    favorite: input.favorite ? 1 : 0,
     rating: Number.isFinite(Number(input.rating)) ? Number(input.rating) : 0,
     notes: asText(input.notes),
     ingredients: asStringArray(input.ingredients),
@@ -70,6 +69,30 @@ function parseJsonArray(value) {
   } catch {
     return [];
   }
+}
+
+function sameRecipeContent(current, normalized) {
+  const scalarFields = [
+    ['title', 'title'],
+    ['description', 'description'],
+    ['prepTime', 'prep_time'],
+    ['cookTime', 'cook_time'],
+    ['servings', 'servings'],
+    ['notes', 'notes'],
+    ['sourceUrl', 'source_url']
+  ];
+
+  for (const [inputKey, rowKey] of scalarFields) {
+    if (asText(current[rowKey]) !== asText(normalized[inputKey])) return false;
+  }
+
+  if (Number(current.rating || 0) !== Number(normalized.rating || 0)) return false;
+  if (asText(current.image_id) !== asText(normalized.imageId)) return false;
+  if (JSON.stringify(parseJsonArray(current.ingredients)) !== JSON.stringify(normalized.ingredients)) return false;
+  if (JSON.stringify(parseJsonArray(current.directions)) !== JSON.stringify(normalized.directions)) return false;
+  if (JSON.stringify(parseJsonArray(current.categories)) !== JSON.stringify(normalized.categories)) return false;
+
+  return true;
 }
 
 function encodeCursor(row) {
@@ -161,9 +184,9 @@ function insertRecipe(db, input, { clientId, mutationId } = {}) {
     INSERT INTO recipes (
       client_id, rev, created_at, updated_at, deleted_at,
       title, description, prep_time, cook_time, servings,
-      favorite, rating, notes, ingredients, directions,
+      rating, notes, ingredients, directions,
       categories, source_url, image_id
-    ) VALUES (?, 1, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, 1, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     recipeClientId,
     timestamp,
@@ -173,7 +196,6 @@ function insertRecipe(db, input, { clientId, mutationId } = {}) {
     normalized.prepTime,
     normalized.cookTime,
     normalized.servings,
-    normalized.favorite,
     normalized.rating,
     normalized.notes,
     JSON.stringify(normalized.ingredients),
@@ -203,6 +225,12 @@ function updateRecipe(db, serverId, input, { mutationId, expectedRev } = {}) {
   }
 
   const normalized = normalizeRecipeInput(input);
+
+  if (sameRecipeContent(current, normalized)) {
+    recordReceipt(db, current.client_id, mutationId, Number(serverId));
+    return { recipe: rowToRecipe(current), replay: false, unchanged: true };
+  }
+
   const timestamp = nowIso();
 
   db.prepare(`
@@ -214,7 +242,6 @@ function updateRecipe(db, serverId, input, { mutationId, expectedRev } = {}) {
       prep_time = ?,
       cook_time = ?,
       servings = ?,
-      favorite = ?,
       rating = ?,
       notes = ?,
       ingredients = ?,
@@ -230,7 +257,6 @@ function updateRecipe(db, serverId, input, { mutationId, expectedRev } = {}) {
     normalized.prepTime,
     normalized.cookTime,
     normalized.servings,
-    normalized.favorite,
     normalized.rating,
     normalized.notes,
     JSON.stringify(normalized.ingredients),

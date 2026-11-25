@@ -10,8 +10,19 @@ const state = {
   pendingImage: null,
   pendingImageRemoved: false,
   importImage: null,
-  localImageUrls: new Map()
+  localImageUrls: new Map(),
+  imageBlobs: new Map(),
+  favorites: new Map(),
+  userName: '',
+  userKey: '',
+  favoriteDialogId: null,
+  editorFavorites: { globalFavorite: false, myFavorite: false }
 };
+
+const AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_SYNC_MIN_GAP_MS = 30 * 1000;
+let syncInFlight = false;
+let lastAutoSyncAt = 0;
 
 const elements = {
   status: document.getElementById('status'),
@@ -21,6 +32,7 @@ const elements = {
   search: document.getElementById('search'),
   sort: document.getElementById('sort'),
   categoryFilters: document.getElementById('category-filters'),
+  settingsButton: document.getElementById('settings-btn'),
   syncButton: document.getElementById('sync-btn'),
   importButton: document.getElementById('import-btn'),
   addButton: document.getElementById('add-btn'),
@@ -29,7 +41,21 @@ const elements = {
   pasteButton: document.getElementById('paste-btn'),
   parseButton: document.getElementById('parse-btn'),
   importImage: document.getElementById('import-image'),
+  importImageInput: document.getElementById('import-image-input'),
+  importImageUrl: document.getElementById('import-image-url'),
+  fetchImageButton: document.getElementById('fetch-image-btn'),
   importImageStatus: document.getElementById('import-image-status'),
+  welcome: document.getElementById('welcome'),
+  welcomeName: document.getElementById('welcome-name'),
+  welcomeSave: document.getElementById('welcome-save'),
+  settings: document.getElementById('settings'),
+  settingsName: document.getElementById('settings-name'),
+  settingsSave: document.getElementById('settings-save'),
+  favoriteDialog: document.getElementById('favorite-dialog'),
+  favoriteRecipeTitle: document.getElementById('favorite-recipe-title'),
+  favoriteGlobal: document.getElementById('favorite-global'),
+  favoriteMe: document.getElementById('favorite-me'),
+  favoriteDone: document.getElementById('favorite-done'),
   detail: document.getElementById('detail'),
   detailImage: document.getElementById('detail-image'),
   detailTitle: document.getElementById('detail-title'),
@@ -38,6 +64,7 @@ const elements = {
   detailIngredients: document.getElementById('detail-ingredients'),
   detailDirections: document.getElementById('detail-directions'),
   detailNotes: document.getElementById('detail-notes'),
+  detailShare: document.getElementById('detail-share'),
   detailEdit: document.getElementById('detail-edit'),
   detailDelete: document.getElementById('detail-delete'),
   editor: document.getElementById('editor'),
@@ -45,6 +72,10 @@ const elements = {
   form: document.getElementById('recipe-form'),
   editorImage: document.getElementById('editor-image'),
   imageInput: document.getElementById('field-image'),
+  editorFavoriteGlobal: document.getElementById('editor-favorite-global'),
+  editorFavoriteMe: document.getElementById('editor-favorite-me'),
+  editorImageUrl: document.getElementById('editor-image-url'),
+  editorFetchImageButton: document.getElementById('editor-fetch-image-btn'),
   removeImage: document.getElementById('remove-image'),
   tokenField: document.getElementById('token-field'),
   tokenInput: document.getElementById('sync-token')
@@ -58,6 +89,27 @@ function setStatus(message, isError = false) {
   if (!elements.status) return;
   elements.status.textContent = message;
   elements.status.classList.toggle('error', Boolean(isError));
+}
+
+function favoriteFor(recipe) {
+  if (!recipe) return RecipeFavorites.emptyFavorite(recipe && recipe.id);
+  return state.favorites.get(recipe.id)
+    || {
+      recipeId: recipe.id,
+      globalFavorite: Boolean(recipe.favorite),
+      myFavorite: false,
+      updatedAt: ''
+    };
+}
+
+function isFavorite(recipe) {
+  return RecipeFavorites.isRecipeFavorite(favoriteFor(recipe));
+}
+
+function setToggleButton(button, active, activeText, inactiveText) {
+  if (!button) return;
+  button.textContent = active ? activeText : inactiveText;
+  button.setAttribute('aria-pressed', String(Boolean(active)));
 }
 
 function splitLines(value) {
@@ -104,23 +156,27 @@ async function loadConfig() {
 async function refreshLocalImageUrls() {
   for (const url of state.localImageUrls.values()) URL.revokeObjectURL(url);
   state.localImageUrls.clear();
+  state.imageBlobs.clear();
 
   const images = await RecipeDB.getAll('images');
   for (const record of images) {
     if (record.imageId && record.blob) {
       state.localImageUrls.set(record.imageId, URL.createObjectURL(record.blob));
+      state.imageBlobs.set(record.imageId, record);
     }
   }
 }
 
 function imageUrlFor(imageId) {
-  if (!imageId) return '/app-icon.png';
+  if (!imageId) return '/app-icon-v12.png';
   return state.localImageUrls.get(imageId)
     || `/api/images/${encodeURIComponent(imageId)}`;
 }
 
 async function loadRecipes() {
   const all = await RecipeDB.getAll('recipes');
+  const favorites = await RecipeDB.getAll('favorites');
+  state.favorites = new Map(favorites.map((record) => [record.recipeId, record]));
   await refreshLocalImageUrls();
 
   state.allRecipes = all.filter((recipe) => !recipe.deleted);
@@ -187,7 +243,7 @@ function applyFilters() {
       return String(a.dateAdded || a.updatedAt || '').localeCompare(String(b.dateAdded || b.updatedAt || ''));
     }
     if (state.sort === 'favorites') {
-      const favoriteDiff = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+      const favoriteDiff = Number(isFavorite(b)) - Number(isFavorite(a));
       if (favoriteDiff) return favoriteDiff;
     }
     return String(a.title || '').localeCompare(String(b.title || ''));
@@ -228,7 +284,7 @@ function renderGrid() {
     image.src = imageUrlFor(recipe.imageId);
     image.alt = '';
     image.loading = 'lazy';
-    image.onerror = () => { image.src = '/app-icon.png'; };
+    image.onerror = () => { image.src = '/app-icon-v12.png'; };
 
     const body = document.createElement('div');
     body.className = 'recipe-card-body';
@@ -240,14 +296,15 @@ function renderGrid() {
     categories.className = 'recipe-categories';
     categories.textContent = (recipe.categories || []).join(', ');
 
+    const favorited = isFavorite(recipe);
     const heart = document.createElement('button');
     heart.type = 'button';
-    heart.className = `favorite-button${recipe.favorite ? ' active' : ''}`;
-    heart.textContent = recipe.favorite ? '♥' : '♡';
-    heart.setAttribute('aria-label', recipe.favorite ? 'Remove favorite' : 'Add favorite');
+    heart.className = `favorite-button${favorited ? ' active' : ''}`;
+    heart.textContent = favorited ? '♥' : '♡';
+    heart.setAttribute('aria-label', favorited ? 'Edit favorites' : 'Add favorite');
     heart.addEventListener('click', (event) => {
       event.stopPropagation();
-      toggleFavorite(recipe.id);
+      openFavoriteDialog(recipe.id);
     });
 
     body.append(title, categories, heart);
@@ -291,17 +348,153 @@ async function enqueueRecipeMutation(recipe, op) {
   await RecipeDB.addMutation(mutation);
 }
 
-async function toggleFavorite(id) {
-  const recipe = await RecipeDB.get('recipes', id);
-  if (!recipe) return;
+async function withSyncLock(task) {
+  if (syncInFlight) return false;
 
-  recipe.favorite = !recipe.favorite;
-  recipe.updatedAt = nowIso();
-  recipe.dirty = true;
+  syncInFlight = true;
+  if (elements.syncButton) elements.syncButton.disabled = true;
+  try {
+    return await task();
+  } finally {
+    syncInFlight = false;
+    if (elements.syncButton) elements.syncButton.disabled = false;
+  }
+}
 
-  await RecipeDB.put('recipes', recipe);
-  await enqueueRecipeMutation(recipe, 'update');
+async function syncAfterLocalChange(message) {
+  if (!navigator.onLine) {
+    setStatus(`${message}. Queued for sync when online.`);
+    return;
+  }
+
+  setStatus(`${message}. Syncing...`);
+  await withSyncLock(async () => {
+    try {
+      await SyncEngine.syncNow((progress) => setStatus(progress));
+      await applyFavoriteStateToRecipes();
+      await loadRecipes();
+      lastAutoSyncAt = Date.now();
+      setStatus(`${message}. Synced.`);
+    } catch (err) {
+      setStatus(`${message}. Sync failed: ${err.message}`, true);
+    }
+  });
+}
+
+async function autoSync(reason) {
+  if (!navigator.onLine || document.hidden) return;
+  if (syncInFlight || Date.now() - lastAutoSyncAt < AUTO_SYNC_MIN_GAP_MS) return;
+
+  setStatus('Syncing...');
+  await withSyncLock(async () => {
+    try {
+      await SyncEngine.syncNow();
+      await applyFavoriteStateToRecipes();
+      await loadRecipes();
+      lastAutoSyncAt = Date.now();
+      setStatus(`Synced ${reason}.`);
+    } catch (err) {
+      setStatus(`Auto sync failed: ${err.message}`, true);
+    }
+  });
+}
+
+async function queueFavoriteChange(recipeId, scope, favorite, options = {}) {
+  const userKey = options.userKey || state.userKey || '';
+  const existing = await RecipeDB.get('favorites', recipeId)
+    || RecipeFavorites.emptyFavorite(recipeId);
+  const next = RecipeFavorites.setScope(existing, scope, favorite);
+  await RecipeDB.put('favorites', next);
+
+  const outbox = await RecipeDB.getAll('favoriteOutbox');
+  const pending = outbox.find((mutation) =>
+    mutation.op === 'favorite'
+    && mutation.recipeId === recipeId
+    && mutation.scope === scope
+  );
+
+  const timestamp = nowIso();
+  const mutation = pending || RecipeFavorites.favoriteMutation({
+    id: SyncEngine.newId(),
+    recipeId,
+    scope,
+    favorite,
+    userKey,
+    createdAt: timestamp
+  });
+
+  mutation.favorite = Boolean(favorite);
+  mutation.userKey = userKey;
+  mutation.clientId = userKey;
+  mutation.updatedAt = timestamp;
+  mutation.lastError = null;
+  await RecipeDB.put('favoriteOutbox', mutation);
+
+  const recipe = await RecipeDB.get('recipes', recipeId);
+  if (recipe) {
+    recipe.favorite = RecipeFavorites.isRecipeFavorite(next);
+    await RecipeDB.put('recipes', recipe);
+  }
+
+  return next;
+}
+
+async function seedLocalFavoritesFromRecipes() {
+  const recipes = await RecipeDB.getAll('recipes');
+  const existing = await RecipeDB.getAll('favorites');
+  const known = new Set(existing.map((record) => record.recipeId));
+
+  for (const recipe of recipes) {
+    if (!recipe.favorite || known.has(recipe.id)) continue;
+    await RecipeDB.put('favorites', {
+      recipeId: recipe.id,
+      globalFavorite: true,
+      myFavorite: false,
+      updatedAt: nowIso()
+    });
+  }
+}
+
+async function applyFavoriteStateToRecipes() {
+  const recipes = await RecipeDB.getAll('recipes');
+  const favorites = await RecipeDB.getAll('favorites');
+  const map = new Map(favorites.map((record) => [record.recipeId, record]));
+
+  for (const recipe of recipes) {
+    const record = map.get(recipe.id);
+    if (!record) continue;
+    const derived = RecipeFavorites.isRecipeFavorite(record);
+    if (Boolean(recipe.favorite) !== derived) {
+      recipe.favorite = derived;
+      await RecipeDB.put('recipes', recipe);
+    }
+  }
+}
+
+async function setRecipeFavorite(recipeId, scope, favorite) {
+  await queueFavoriteChange(recipeId, scope, favorite);
   await loadRecipes();
+  updateFavoriteDialog();
+  await syncAfterLocalChange('Favorites updated');
+}
+
+function openFavoriteDialog(recipeId) {
+  const recipe = state.allRecipes.find((item) => item.id === recipeId);
+  if (!recipe || !elements.favoriteDialog) return;
+
+  state.favoriteDialogId = recipeId;
+  elements.favoriteRecipeTitle.textContent = recipe.title || 'Untitled recipe';
+  updateFavoriteDialog();
+  elements.favoriteDialog.hidden = false;
+}
+
+function updateFavoriteDialog() {
+  if (!state.favoriteDialogId || !elements.favoriteDialog) return;
+  const record = state.favorites.get(state.favoriteDialogId)
+    || RecipeFavorites.emptyFavorite(state.favoriteDialogId);
+
+  setToggleButton(elements.favoriteGlobal, record.globalFavorite, 'On', 'Off');
+  setToggleButton(elements.favoriteMe, record.myFavorite, 'On', 'Off');
 }
 
 async function sha256Blob(blob) {
@@ -335,17 +528,22 @@ function openDetail(id) {
 
   state.detailId = id;
   elements.detailImage.src = imageUrlFor(recipe.imageId);
-  elements.detailImage.onerror = () => { elements.detailImage.src = '/app-icon.png'; };
+  elements.detailImage.onerror = () => { elements.detailImage.src = '/app-icon-v12.png'; };
   elements.detailTitle.textContent = recipe.title || 'Untitled recipe';
   elements.detailDescription.textContent = recipe.description || '';
   elements.detailDescription.hidden = !recipe.description;
 
+  const favorite = favoriteFor(recipe);
+  const favoriteScopes = [];
+  if (favorite.globalFavorite) favoriteScopes.push('Everyone');
+  if (favorite.myFavorite) favoriteScopes.push('For Me');
+
   elements.detailMeta.innerHTML = '';
   const metaItems = [
     ['Prep', recipe.prepTime],
-    ['Cook', recipe.cookTime],
+    ['Cook / total', recipe.cookTime],
     ['Servings', recipe.servings],
-    ['Favorite', recipe.favorite ? 'Yes' : 'No'],
+    ['Favorite', favoriteScopes.length ? `Yes (${favoriteScopes.join(', ')})` : 'No'],
     ['Categories', (recipe.categories || []).join(', ')],
     ['Source', recipe.sourceUrl]
   ];
@@ -383,6 +581,102 @@ function openDetail(id) {
   elements.detail.hidden = false;
 }
 
+function shareablePhotoFile(recipe) {
+  if (!recipe || !recipe.imageId) return null;
+  const record = state.imageBlobs.get(recipe.imageId);
+  if (!record || !record.blob || typeof File === 'undefined') return null;
+
+  const mime = record.mime || record.blob.type || 'image/jpeg';
+  let file;
+  try {
+    file = new File([record.blob], RecipeShare.photoFileName(recipe.title, mime), {
+      type: mime,
+      lastModified: Date.now()
+    });
+    if (typeof navigator.canShare === 'function' && !navigator.canShare({ files: [file] })) {
+      return null;
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return file;
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-1000px';
+  textarea.style.opacity = '0';
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand('copy')) throw new Error('Copy was blocked.');
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function shareCurrentRecipe() {
+  const recipe = state.allRecipes.find((item) => item.id === state.detailId);
+  if (!recipe) return;
+
+  const title = `Diane's Recipes — ${recipe.title || 'Untitled recipe'}`;
+  const text = RecipeShare.recipeShareText(recipe);
+  const file = shareablePhotoFile(recipe);
+
+  if (typeof navigator.share === 'function') {
+    try {
+      const payload = file ? { title, text, files: [file] } : { title, text };
+      await navigator.share(payload);
+      setStatus('Recipe shared.');
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+
+      if (file) {
+        try {
+          await navigator.share({ title, text });
+          setStatus('Recipe shared.');
+          return;
+        } catch (retryError) {
+          if (retryError && retryError.name === 'AbortError') return;
+        }
+      }
+    }
+  }
+
+  try {
+    await copyToClipboard(text);
+    setStatus('Recipe copied — paste to share.');
+  } catch (err) {
+    setStatus(`Could not share recipe: ${err.message}`, true);
+  }
+}
+
+function updateEditorFavoriteButtons() {
+  setToggleButton(
+    elements.editorFavoriteGlobal,
+    state.editorFavorites.globalFavorite,
+    'Everyone: On',
+    'Everyone: Off'
+  );
+  setToggleButton(
+    elements.editorFavoriteMe,
+    state.editorFavorites.myFavorite,
+    'For Me: On',
+    'For Me: Off'
+  );
+}
+
 async function openEditor(id = null, options = {}) {
   const draft = options.draft || null;
   state.editingId = id;
@@ -398,6 +692,20 @@ async function openEditor(id = null, options = {}) {
       : 'New recipe';
   elements.form.reset();
 
+  const favoriteRecord = recipe
+    ? (state.favorites.get(id) || await RecipeDB.get('favorites', id))
+    : null;
+  state.editorFavorites = favoriteRecord
+    ? {
+      globalFavorite: Boolean(favoriteRecord.globalFavorite),
+      myFavorite: Boolean(favoriteRecord.myFavorite)
+    }
+    : {
+      globalFavorite: Boolean(source.favorite),
+      myFavorite: false
+    };
+  updateEditorFavoriteButtons();
+
   if (state.pendingImage) {
     elements.editorImage.src = URL.createObjectURL(state.pendingImage.blob);
   } else if (source.imageId && state.localImageUrls.has(source.imageId)) {
@@ -405,22 +713,22 @@ async function openEditor(id = null, options = {}) {
   } else if (source.imageId) {
     elements.editorImage.src = `/api/images/${encodeURIComponent(source.imageId)}`;
   } else {
-    elements.editorImage.src = '/app-icon.png';
+    elements.editorImage.src = '/app-icon-v12.png';
   }
-  elements.editorImage.onerror = () => { elements.editorImage.src = '/app-icon.png'; };
+  elements.editorImage.onerror = () => { elements.editorImage.src = '/app-icon-v12.png'; };
 
   document.getElementById('field-title').value = source.title || '';
   document.getElementById('field-description').value = source.description || '';
   document.getElementById('field-prep').value = source.prepTime || '';
-  document.getElementById('field-cook').value = source.cookTime || '';
+  document.getElementById('field-cook').value = source.cookTime || source.totalTime || '';
   document.getElementById('field-servings').value = source.servings || '';
   document.getElementById('field-categories').value = (source.categories || []).join(', ');
-  document.getElementById('field-favorite').checked = Boolean(source.favorite);
   document.getElementById('field-ingredients').value = (source.ingredients || []).join('\n');
   document.getElementById('field-directions').value = (source.directions || []).join('\n');
   document.getElementById('field-notes').value = source.notes || '';
   document.getElementById('field-url').value = source.sourceUrl || '';
   elements.imageInput.value = '';
+  elements.editorImageUrl.value = '';
 
   elements.detail.hidden = true;
   elements.import.hidden = true;
@@ -444,8 +752,10 @@ function openImport() {
   state.importImage = null;
   elements.importText.value = '';
   elements.importImage.hidden = true;
-  elements.importImage.src = '/app-icon.png';
+  elements.importImage.src = '/app-icon-v12.png';
   elements.importImageStatus.textContent = 'No photo detected';
+  elements.importImageInput.value = '';
+  elements.importImageUrl.value = '';
   elements.detail.hidden = true;
   elements.editor.hidden = true;
   elements.import.hidden = false;
@@ -470,8 +780,61 @@ async function setImportImage(blob, mime) {
   elements.importImageStatus.textContent = `Photo ready (${size})`;
 }
 
+function isImageType(type) {
+  return String(type || '').toLowerCase().startsWith('image/');
+}
+
+async function syncAuthHeaders() {
+  const token = await RecipeDB.getSetting('syncToken', '');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function fetchImageBlobFromUrl(url) {
+  const clean = String(url || '').trim();
+  if (!/^https?:\/\//i.test(clean)) {
+    throw new Error('Enter an http or https image URL.');
+  }
+
+  const response = await fetch(`/api/fetch-image?url=${encodeURIComponent(clean)}`, {
+    headers: await syncAuthHeaders()
+  });
+
+  if (!response.ok) {
+    let message = `Image URL rejected (${response.status}).`;
+    try {
+      const data = await response.json();
+      if (data && data.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  if (!isImageType(blob.type)) {
+    throw new Error('The URL did not return an image.');
+  }
+
+  return { blob, url: clean };
+}
+
+async function addImageFromUrl(url, announce = true) {
+  const { blob, url: clean } = await fetchImageBlobFromUrl(url);
+  await setImportImage(blob, blob.type);
+  elements.importImageUrl.value = clean;
+  if (announce) setStatus('Photo added from URL.');
+  return blob;
+}
+
+async function addEditorImageFromUrl(url) {
+  const { blob, url: clean } = await fetchImageBlobFromUrl(url);
+  await setPendingImage(blob, blob.type);
+  elements.editorImageUrl.value = clean;
+  setStatus('Recipe photo added from URL. Save to keep it.');
+  return blob;
+}
+
 async function pasteFromClipboard() {
   let textPasted = false;
+  let photoPasted = false;
 
   try {
     const text = await navigator.clipboard.readText();
@@ -481,37 +844,78 @@ async function pasteFromClipboard() {
     }
   } catch {}
 
-  setStatus(
-    textPasted
-      ? 'Clipboard text pasted.'
-      : 'Clipboard text unavailable. Tap the text box and paste manually.',
-    !textPasted
-  );
-
   if (navigator.clipboard && navigator.clipboard.read && typeof window.ClipboardItem !== 'undefined') {
     try {
       const items = await navigator.clipboard.read();
       for (const item of items) {
-        const imageType = (item.types || []).find((type) => String(type).startsWith('image/'));
+        const imageType = (item.types || []).find(isImageType);
         if (!imageType) continue;
         const blob = await item.getType(imageType);
         await setImportImage(blob, imageType);
+        photoPasted = true;
         break;
       }
     } catch {}
   }
+
+  if (photoPasted) {
+    setStatus(textPasted
+      ? 'Clipboard text and photo pasted.'
+      : 'Clipboard photo added. Paste the text manually if needed.');
+  } else {
+    setStatus(
+      textPasted
+        ? 'Clipboard text pasted.'
+        : 'Clipboard text/photo unavailable. Tap the text box and paste, or choose a photo.',
+      !textPasted
+    );
+  }
 }
 
 async function handleImportPaste(event) {
-  const items = event.clipboardData && event.clipboardData.items;
-  if (!items) return;
+  const clipboard = event.clipboardData || window.clipboardData;
+  if (!clipboard) return;
 
+  const images = [];
+  const files = clipboard.files ? Array.from(clipboard.files) : [];
+  for (const file of files) {
+    if (isImageType(file.type)) images.push({ blob: file, mime: file.type });
+  }
+
+  const items = clipboard.items ? Array.from(clipboard.items) : [];
   for (const item of items) {
-    if (item.kind === 'file' && String(item.type).startsWith('image/')) {
-      const file = item.getAsFile();
-      if (file) await setImportImage(file, file.type || item.type);
+    if (item.kind !== 'file' || !isImageType(item.type)) continue;
+    const file = item.getAsFile();
+    if (file) images.push({ blob: file, mime: file.type || item.type });
+  }
+
+  if (clipboard.getData) {
+    const html = clipboard.getData('text/html') || '';
+    const plain = clipboard.getData('text/plain') || '';
+
+    if (!elements.importImageUrl.value) {
+      const remoteImage = html.match(/<img[^>]+src=["'](https?:[^"']+)["']/i)
+        || plain.match(/^\s*(?:image|photo|picture)\s*:\s*(https?:\/\/\S+)/im);
+      if (remoteImage) {
+        elements.importImageUrl.value = remoteImage[1];
+        setStatus('Image URL found. Tap Add from URL to attach it.');
+      }
+    }
+
+    const dataImage = html.match(/<img[^>]+src=["'](data:image\/[^"']+)["']/i);
+    if (dataImage) {
+      try {
+        const response = await fetch(dataImage[1]);
+        const blob = await response.blob();
+        images.push({ blob, mime: blob.type || 'image/jpeg' });
+      } catch {}
     }
   }
+
+  if (!images.length) return;
+
+  await setImportImage(images[0].blob, images[0].mime);
+  setStatus('Clipboard photo added.');
 }
 
 async function parseImport() {
@@ -527,15 +931,59 @@ async function parseImport() {
     return;
   }
 
+  if (!elements.importImageUrl.value && parsed.imageUrl) {
+    elements.importImageUrl.value = parsed.imageUrl;
+  }
+
+  let imageError = '';
+  const imageUrl = elements.importImageUrl.value.trim();
+  if (imageUrl && !state.importImage) {
+    try {
+      await addImageFromUrl(imageUrl, false);
+    } catch (err) {
+      imageError = err.message;
+    }
+  }
+
   const photoReady = Boolean(state.importImage);
   await openEditor(null, { draft: parsed, pendingImage: state.importImage });
 
   state.importImage = null;
   elements.importText.value = '';
+  elements.importImageUrl.value = '';
   elements.importImage.hidden = true;
-  elements.importImage.src = '/app-icon.png';
+  elements.importImage.src = '/app-icon-v12.png';
   elements.importImageStatus.textContent = 'No photo detected';
-  setStatus(`Imported: ${importSummary(parsed, photoReady)}. Review before saving.`);
+
+  const summary = `Imported: ${importSummary(parsed, photoReady)}. Review before saving.`;
+  setStatus(imageError ? `${summary} Image URL failed: ${imageError}` : summary, Boolean(imageError));
+}
+
+function sameArray(a, b) {
+  return JSON.stringify(a || []) === JSON.stringify(b || []);
+}
+
+function recipeContentChanged(existing, next) {
+  if (!existing) return true;
+
+  const fields = [
+    'title',
+    'description',
+    'prepTime',
+    'cookTime',
+    'servings',
+    'notes',
+    'sourceUrl',
+    'imageId'
+  ];
+
+  if (fields.some((field) => String(existing[field] || '') !== String(next[field] || ''))) {
+    return true;
+  }
+
+  return !sameArray(existing.ingredients, next.ingredients)
+    || !sameArray(existing.directions, next.directions)
+    || !sameArray(existing.categories, next.categories);
 }
 
 async function saveRecipe(event) {
@@ -549,6 +997,7 @@ async function saveRecipe(event) {
   }
 
   const existing = state.editingId ? await RecipeDB.get('recipes', state.editingId) : null;
+  const recipeId = existing ? existing.id : SyncEngine.newId();
   const timestamp = nowIso();
   let imageId = existing ? existing.imageId || null : null;
 
@@ -580,8 +1029,11 @@ async function saveRecipe(event) {
     }
   }
 
+  const currentFavorite = await RecipeDB.get('favorites', recipeId)
+    || RecipeFavorites.emptyFavorite(recipeId);
+
   const recipe = {
-    id: existing ? existing.id : SyncEngine.newId(),
+    id: recipeId,
     serverId: existing ? existing.serverId || null : null,
     rev: existing ? existing.rev || 0 : 0,
     title,
@@ -589,7 +1041,7 @@ async function saveRecipe(event) {
     prepTime: String(data.get('prepTime') || ''),
     cookTime: String(data.get('cookTime') || ''),
     servings: String(data.get('servings') || ''),
-    favorite: Boolean(data.get('favorite')),
+    favorite: false,
     rating: existing ? existing.rating || 0 : 0,
     notes: String(data.get('notes') || ''),
     ingredients: splitLines(data.get('ingredients')),
@@ -598,27 +1050,51 @@ async function saveRecipe(event) {
     sourceUrl: String(data.get('sourceUrl') || ''),
     imageId,
     dateAdded: existing ? existing.dateAdded : timestamp,
-    dateModified: timestamp,
+    dateModified: existing ? existing.dateModified : timestamp,
     deleted: false,
     deletedAt: null,
-    updatedAt: timestamp,
-    dirty: true
+    updatedAt: existing ? existing.updatedAt : timestamp,
+    dirty: existing ? Boolean(existing.dirty) : true
   };
 
-  await RecipeDB.put('recipes', recipe);
-  await enqueueRecipeMutation(recipe, existing ? 'update' : 'create');
+  const contentChanged = recipeContentChanged(existing, recipe);
+  if (contentChanged) {
+    recipe.dateModified = timestamp;
+    recipe.updatedAt = timestamp;
+    recipe.dirty = true;
+    await RecipeDB.put('recipes', recipe);
+    await enqueueRecipeMutation(recipe, existing ? 'update' : 'create');
+  }
+
+  const favoriteChanges = [];
+  for (const [scope, key] of [['global', 'globalFavorite'], ['me', 'myFavorite']]) {
+    if (Boolean(currentFavorite[key]) !== Boolean(state.editorFavorites[key])) {
+      favoriteChanges.push({ scope, favorite: Boolean(state.editorFavorites[key]) });
+    }
+  }
+
+  for (const change of favoriteChanges) {
+    await queueFavoriteChange(recipeId, change.scope, change.favorite);
+  }
 
   state.pendingImage = null;
   state.pendingImageRemoved = false;
+  state.editingId = null;
   elements.editor.hidden = true;
   await loadRecipes();
-  setStatus('Recipe saved locally. Sync to send it to the server.');
+
+  if (!contentChanged && !favoriteChanges.length) {
+    setStatus('No changes to save.');
+    return;
+  }
+
+  await syncAfterLocalChange('Recipe saved');
 }
 
 async function deleteRecipe() {
   const id = state.detailId;
   if (!id) return;
-  if (!window.confirm('Delete this recipe and sync the deletion?')) return;
+  if (!window.confirm('Delete this recipe? It will also be removed from other devices when synced.')) return;
 
   const recipe = await RecipeDB.get('recipes', id);
   if (!recipe) return;
@@ -627,6 +1103,12 @@ async function deleteRecipe() {
   const pendingCreate = outbox.find((mutation) =>
     mutation.entityId === id && mutation.op === 'create'
   );
+
+  const favoriteOutbox = await RecipeDB.getAll('favoriteOutbox');
+  for (const mutation of favoriteOutbox) {
+    if (mutation.recipeId === id) await RecipeDB.remove('favoriteOutbox', mutation.id);
+  }
+  await RecipeDB.remove('favorites', id);
 
   if (pendingCreate) {
     await RecipeDB.remove('outbox', pendingCreate.id);
@@ -647,28 +1129,172 @@ async function deleteRecipe() {
   elements.detail.hidden = true;
   state.detailId = null;
   await loadRecipes();
-  setStatus('Recipe deleted locally. Sync to send the deletion.');
+  await syncAfterLocalChange('Recipe deleted');
 }
 
 async function runSync() {
-  elements.syncButton.disabled = true;
-  try {
-    await SyncEngine.syncNow((message) => setStatus(message));
-    await loadRecipes();
-    setStatus('Sync complete.');
-  } catch (err) {
-    setStatus(`Sync failed: ${err.message}`, true);
-  } finally {
-    elements.syncButton.disabled = false;
+  await withSyncLock(async () => {
+    try {
+      await SyncEngine.syncNow((message) => setStatus(message));
+      await applyFavoriteStateToRecipes();
+      await loadRecipes();
+      lastAutoSyncAt = Date.now();
+      setStatus('Sync complete.');
+    } catch (err) {
+      setStatus(`Sync failed: ${err.message}`, true);
+    }
+  });
+}
+
+function updateUserLabel() {
+  if (!elements.settingsButton) return;
+  elements.settingsButton.title = state.userName
+    ? `Settings (${state.userName})`
+    : 'Settings';
+}
+
+async function loadUserProfile() {
+  state.userName = (await RecipeDB.getSetting('userName', '')) || '';
+  state.userKey = (await RecipeDB.getSetting('userKey', '')) || '';
+  updateUserLabel();
+
+  if (!state.userName || !state.userKey) {
+    if (elements.welcome) {
+      elements.welcomeName.value = '';
+      elements.welcome.hidden = false;
+      elements.welcomeName.focus();
+    }
+    return false;
   }
+
+  return true;
+}
+
+async function queueRenameUser(oldUserKey, newUserKey, displayName) {
+  const outbox = await RecipeDB.getAll('favoriteOutbox');
+  const pending = outbox.find((mutation) => mutation.op === 'rename');
+  const mutation = pending || RecipeFavorites.renameMutation({
+    id: SyncEngine.newId(),
+    oldUserKey,
+    newUserKey,
+    displayName
+  });
+
+  mutation.oldUserKey = oldUserKey;
+  mutation.newUserKey = newUserKey;
+  mutation.displayName = displayName;
+  mutation.updatedAt = nowIso();
+  mutation.lastError = null;
+  await RecipeDB.put('favoriteOutbox', mutation);
+}
+
+function openSettings() {
+  if (!elements.settings) return;
+  elements.settingsName.value = state.userName;
+  elements.settings.hidden = false;
+  elements.settingsName.focus();
+}
+
+async function saveUserName(rawName, firstLaunch = false) {
+  const name = RecipeFavorites.displayName(rawName);
+  if (!name) {
+    setStatus('Enter a name first.', true);
+    return false;
+  }
+
+  const newKey = RecipeFavorites.userKeyFromName(name);
+  const oldKey = state.userKey;
+
+  await RecipeDB.setSetting('userName', name);
+  await RecipeDB.setSetting('userKey', newKey);
+  state.userName = name;
+  state.userKey = newKey;
+  updateUserLabel();
+
+  if (elements.welcome) elements.welcome.hidden = true;
+  if (elements.settings) elements.settings.hidden = true;
+
+  if (oldKey && oldKey !== newKey) {
+    await RecipeDB.setSetting('favoritesCursor', '');
+
+    const favoriteOutbox = await RecipeDB.getAll('favoriteOutbox');
+    for (const mutation of favoriteOutbox) {
+      if (mutation.op !== 'favorite') continue;
+      mutation.userKey = newKey;
+      mutation.clientId = newKey;
+      mutation.updatedAt = nowIso();
+      await RecipeDB.put('favoriteOutbox', mutation);
+    }
+
+    await queueRenameUser(oldKey, newKey, name);
+  }
+
+  await loadRecipes();
+  await syncAfterLocalChange(firstLaunch ? 'Name saved' : 'Name saved');
+  return true;
 }
 
 function bindEvents() {
   elements.syncButton.addEventListener('click', runSync);
+  elements.settingsButton.addEventListener('click', openSettings);
+  elements.welcomeSave.addEventListener('click', () => {
+    saveUserName(elements.welcomeName.value, true).catch((err) =>
+      setStatus(`Could not save name: ${err.message}`, true)
+    );
+  });
+  elements.welcomeName.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') elements.welcomeSave.click();
+  });
+  elements.settingsSave.addEventListener('click', () => {
+    saveUserName(elements.settingsName.value).catch((err) =>
+      setStatus(`Could not save name: ${err.message}`, true)
+    );
+  });
+  elements.settingsName.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') elements.settingsSave.click();
+  });
+  elements.favoriteGlobal.addEventListener('click', () => {
+    setRecipeFavorite(state.favoriteDialogId, 'global', !state.favorites.get(state.favoriteDialogId || '')?.globalFavorite);
+  });
+  elements.favoriteMe.addEventListener('click', () => {
+    setRecipeFavorite(state.favoriteDialogId, 'me', !state.favorites.get(state.favoriteDialogId || '')?.myFavorite);
+  });
+  elements.favoriteDone.addEventListener('click', () => {
+    elements.favoriteDialog.hidden = true;
+    state.favoriteDialogId = null;
+  });
+  elements.editorFavoriteGlobal.addEventListener('click', () => {
+    state.editorFavorites.globalFavorite = !state.editorFavorites.globalFavorite;
+    updateEditorFavoriteButtons();
+  });
+  elements.editorFavoriteMe.addEventListener('click', () => {
+    state.editorFavorites.myFavorite = !state.editorFavorites.myFavorite;
+    updateEditorFavoriteButtons();
+  });
   elements.importButton.addEventListener('click', openImport);
   elements.pasteButton.addEventListener('click', pasteFromClipboard);
   elements.parseButton.addEventListener('click', parseImport);
-  elements.importText.addEventListener('paste', handleImportPaste);
+  elements.import.addEventListener('paste', handleImportPaste);
+  elements.importImageInput.addEventListener('change', async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    await setImportImage(file, file.type);
+    setStatus('Photo chosen.');
+  });
+  elements.fetchImageButton.addEventListener('click', async () => {
+    try {
+      await addImageFromUrl(elements.importImageUrl.value);
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+  elements.editorFetchImageButton.addEventListener('click', async () => {
+    try {
+      await addEditorImageFromUrl(elements.editorImageUrl.value);
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
   elements.addButton.addEventListener('click', () => openEditor());
 
   elements.search.addEventListener('input', () => {
@@ -685,11 +1311,13 @@ function bindEvents() {
   elements.removeImage.addEventListener('click', () => {
     state.pendingImage = null;
     state.pendingImageRemoved = true;
-    elements.editorImage.src = '/app-icon.png';
+    elements.editorImage.src = '/app-icon-v12.png';
     elements.imageInput.value = '';
+    elements.editorImageUrl.value = '';
   });
 
   elements.form.addEventListener('submit', saveRecipe);
+  elements.detailShare.addEventListener('click', shareCurrentRecipe);
   elements.detailEdit.addEventListener('click', () => openEditor(state.detailId));
   elements.detailDelete.addEventListener('click', deleteRecipe);
 
@@ -706,7 +1334,19 @@ function bindEvents() {
   });
 
   window.addEventListener('offline', () => setStatus('Offline — using cached recipes.', true));
-  window.addEventListener('online', () => setStatus('Back online. Sync when ready.'));
+  window.addEventListener('online', () => {
+    setStatus('Back online. Syncing...');
+    autoSync('after reconnecting');
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) autoSync('after returning to the app');
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) autoSync('after returning to the app');
+  });
+
+  window.setInterval(() => autoSync('automatically'), AUTO_SYNC_INTERVAL_MS);
 }
 
 async function initialize() {
@@ -714,14 +1354,25 @@ async function initialize() {
   registerServiceWorker();
   await RecipeDB.open();
   bindEvents();
+  const hasProfile = await loadUserProfile();
+  await seedLocalFavoritesFromRecipes();
   await loadConfig();
   await loadRecipes();
 
-  if (!state.allRecipes.length && navigator.onLine) {
+  if (!state.allRecipes.length) {
     await RecipeDB.setSyncState('cursor', '');
-    await runSync();
+    await RecipeDB.setSetting('favoritesCursor', '');
+  }
+
+  if (!hasProfile) {
+    setStatus('Enter a name to finish setup.');
+    return;
+  }
+
+  if (navigator.onLine) {
+    await autoSync('on open');
   } else {
-    setStatus(`${state.allRecipes.length} recipes available offline.`);
+    setStatus('Offline — using cached recipes.', true);
   }
 }
 

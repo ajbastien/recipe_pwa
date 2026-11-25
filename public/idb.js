@@ -1,5 +1,5 @@
 const RECIPE_DB_NAME = 'my-recipes';
-const RECIPE_DB_VERSION = 1;
+const RECIPE_DB_VERSION = 2;
 
 let recipeDbPromise = null;
 
@@ -33,6 +33,14 @@ function openRecipeDb() {
 
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'name' });
+      }
+
+      if (!db.objectStoreNames.contains('favorites')) {
+        db.createObjectStore('favorites', { keyPath: 'recipeId' });
+      }
+
+      if (!db.objectStoreNames.contains('favoriteOutbox')) {
+        db.createObjectStore('favoriteOutbox', { keyPath: 'id' });
       }
     };
 

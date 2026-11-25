@@ -1,6 +1,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
+const favorites = require('./favorites');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'recipes.db');
 
@@ -71,6 +72,54 @@ function initSchema(db) {
       value  TEXT
     );
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_users (
+      user_key     TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS favorites (
+      scope            TEXT NOT NULL CHECK (scope IN ('global', 'me')),
+      user_key         TEXT NOT NULL DEFAULT '',
+      recipe_client_id TEXT NOT NULL,
+      favorite         INTEGER NOT NULL DEFAULT 0,
+      updated_at       TEXT NOT NULL,
+      seq              INTEGER NOT NULL,
+      PRIMARY KEY (scope, user_key, recipe_client_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_favorites_pull
+      ON favorites(seq, scope, user_key);
+
+    CREATE INDEX IF NOT EXISTS idx_favorites_recipe
+      ON favorites(recipe_client_id);
+
+    CREATE TABLE IF NOT EXISTS favorite_receipts (
+      client_id    TEXT NOT NULL,
+      mutation_id  TEXT NOT NULL,
+      applied_at   TEXT NOT NULL,
+      PRIMARY KEY (client_id, mutation_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_rename_receipts (
+      mutation_id   TEXT PRIMARY KEY,
+      old_user_key  TEXT NOT NULL,
+      new_user_key  TEXT NOT NULL,
+      moved         INTEGER NOT NULL DEFAULT 0,
+      applied_at    TEXT NOT NULL
+    );
+  `);
+
+  const row = db.prepare('PRAGMA user_version').get();
+  const version = Number(row && row.user_version) || 0;
+
+  if (version < 2) {
+    favorites.seedGlobalFavorites(db);
+    db.exec('PRAGMA user_version = 2');
+  }
 }
 
 module.exports = {

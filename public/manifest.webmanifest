@@ -1,7 +1,7 @@
 {
-  "name": "My Recipes",
-  "short_name": "My Recipes",
-  "description": "Your recipes, available offline.",
+  "name": "Diane's Recipes",
+  "short_name": "Diane's Recipes",
+  "description": "Diane's recipes, available offline.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -9,13 +9,13 @@
   "theme_color": "#8f302e",
   "icons": [
     {
-      "src": "/app-icon-192.png",
+      "src": "/app-icon-192-v12.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon-512.png",
+      "src": "/app-icon-512-v12.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

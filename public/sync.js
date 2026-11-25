@@ -43,7 +43,7 @@ const SyncEngine = (() => {
       prepTime: recipe.prepTime || '',
       cookTime: recipe.cookTime || '',
       servings: recipe.servings || '',
-      favorite: Boolean(recipe.favorite),
+      favoriteScope: 'separate',
       rating: recipe.rating || 0,
       notes: recipe.notes || '',
       ingredients: recipe.ingredients || [],
@@ -55,7 +55,7 @@ const SyncEngine = (() => {
     };
   }
 
-  function fromServerRecipe(row, existingId) {
+  function fromServerRecipe(row, existingId, favoriteRecord) {
     return {
       id: existingId || row.clientId,
       serverId: row.serverId,
@@ -65,7 +65,9 @@ const SyncEngine = (() => {
       prepTime: row.prepTime || '',
       cookTime: row.cookTime || '',
       servings: row.servings || '',
-      favorite: Boolean(row.favorite),
+      favorite: favoriteRecord
+        ? RecipeFavorites.isRecipeFavorite(favoriteRecord)
+        : Boolean(row.favorite),
       rating: row.rating || 0,
       notes: row.notes || '',
       ingredients: row.ingredients || [],
@@ -96,7 +98,8 @@ const SyncEngine = (() => {
 
     if (pendingIds.has(id)) return;
 
-    const local = fromServerRecipe(row, id);
+    const favoriteRecord = await RecipeDB.get('favorites', id);
+    const local = fromServerRecipe(row, id, favoriteRecord);
     if (existing && existing.deleted && !local.deleted) {
       local.id = existing.id;
     }
@@ -214,6 +217,103 @@ const SyncEngine = (() => {
     await RecipeDB.setSyncState('lastSync', new Date().toISOString());
   }
 
+  async function pushFavoriteMutations(mutations, report) {
+    if (!mutations.length) return;
+
+    const renames = mutations.filter((mutation) => mutation.op === 'rename');
+    const changes = mutations.filter((mutation) => mutation.op !== 'rename');
+
+    for (const mutation of renames) {
+      try {
+        await fetchJson('/api/favorites/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: mutation.id,
+            oldUserKey: mutation.oldUserKey,
+            newUserKey: mutation.newUserKey,
+            displayName: mutation.displayName
+          })
+        });
+        await RecipeDB.remove('favoriteOutbox', mutation.id);
+        report.pushed += 1;
+      } catch (err) {
+        mutation.lastError = err.message;
+        mutation.attempts = (mutation.attempts || 0) + 1;
+        await RecipeDB.put('favoriteOutbox', mutation);
+        report.failed += 1;
+        throw err;
+      }
+    }
+
+    if (!changes.length) return;
+
+    const data = await fetchJson('/api/favorites/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mutations: changes })
+    });
+
+    const results = Array.isArray(data.results) ? data.results : [];
+    const byId = new Map(results.map((result) => [result.mutationId, result]));
+
+    for (const mutation of changes) {
+      const result = byId.get(mutation.id) || { status: 'error', error: 'No result returned.' };
+
+      if (result.status === 'ok') {
+        await RecipeDB.remove('favoriteOutbox', mutation.id);
+        report.pushed += 1;
+        continue;
+      }
+
+      mutation.lastError = result.error || 'Favorite sync failed.';
+      mutation.attempts = (mutation.attempts || 0) + 1;
+      await RecipeDB.put('favoriteOutbox', mutation);
+      report.failed += 1;
+    }
+  }
+
+  async function pullFavorites(report) {
+    const userKey = await RecipeDB.getSetting('userKey', '');
+    if (!userKey) return;
+
+    let cursor = await RecipeDB.getSetting('favoritesCursor', '');
+    const pending = await RecipeDB.getAll('favoriteOutbox');
+    const pendingKeys = new Set(
+      pending
+        .filter((mutation) => mutation.op === 'favorite')
+        .map((mutation) => `${mutation.recipeId}|${mutation.scope}`)
+    );
+
+    while (true) {
+      const query = new URLSearchParams({ limit: '500', userKey });
+      if (cursor) query.set('cursor', cursor);
+
+      const page = await fetchJson(`/api/favorites/pull?${query.toString()}`);
+      const rows = Array.isArray(page.favorites) ? page.favorites : [];
+
+      for (const row of rows) {
+        if (!row || !row.recipeId) continue;
+        if (pendingKeys.has(`${row.recipeId}|${row.scope}`)) continue;
+
+        const existing = await RecipeDB.get('favorites', row.recipeId)
+          || RecipeFavorites.emptyFavorite(row.recipeId);
+        await RecipeDB.put('favorites', RecipeFavorites.applyServerRow(existing, row));
+      }
+
+      report.favoritePulled = (report.favoritePulled || 0) + rows.length;
+
+      if (page.cursor) {
+        cursor = page.cursor;
+        await RecipeDB.setSetting('favoritesCursor', cursor);
+      }
+
+      if (!page.hasMore || !rows.length) break;
+    }
+
+    await RecipeDB.setSetting('lastFavoriteSync', new Date().toISOString());
+  }
+
   async function syncNow(onProgress = () => {}) {
     if (!navigator.onLine) throw new Error('Offline');
 
@@ -229,6 +329,13 @@ const SyncEngine = (() => {
     const recipeMutations = outbox.filter(
       (mutation) => mutation.entity === 'recipe' || ['create', 'update', 'delete'].includes(mutation.op)
     );
+    const favoriteMutations = await RecipeDB.getAll('favoriteOutbox');
+    favoriteMutations.sort((a, b) => {
+      const aRank = a.op === 'rename' ? 0 : 1;
+      const bRank = b.op === 'rename' ? 0 : 1;
+      if (aRank !== bRank) return aRank - bRank;
+      return String(a.createdAt).localeCompare(String(b.createdAt));
+    });
 
     for (let index = 0; index < imageMutations.length; index += 1) {
       onProgress(`Uploading image ${index + 1} of ${imageMutations.length}...`);
@@ -250,6 +357,11 @@ const SyncEngine = (() => {
       await pushRecipeMutations(recipeMutations, report);
     }
 
+    if (favoriteMutations.length) {
+      onProgress(`Pushing ${favoriteMutations.length} favorite change(s)...`);
+      await pushFavoriteMutations(favoriteMutations, report);
+    }
+
     if (report.failed) {
       throw new Error(`${report.failed} change(s) still pending.`);
     }
@@ -257,7 +369,10 @@ const SyncEngine = (() => {
     onProgress('Pulling server changes...');
     await pullAll(report);
 
-    onProgress(`Sync complete: ${report.pushed} pushed, ${report.pulled} pulled.`);
+    onProgress('Pulling favorites...');
+    await pullFavorites(report);
+
+    onProgress(`Sync complete: ${report.pushed} pushed, ${report.pulled} recipes pulled.`);
     return report;
   }
 

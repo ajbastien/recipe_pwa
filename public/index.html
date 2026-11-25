@@ -3,26 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Recipes</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="icon" type="image/png" href="/app-icon.png">
-  <link rel="apple-touch-icon" href="/app-icon.png">
+  <title>Diane's Recipes</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon-v12.svg">
+  <link rel="icon" type="image/png" href="/app-icon-v12.png">
+  <link rel="apple-touch-icon" href="/app-icon-v12.png">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#8f302e">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="My Recipes">
+  <meta name="apple-mobile-web-app-title" content="Diane's Recipes">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="app-header">
-      <img class="app-mark" src="/app-icon.png" alt="">
+      <img class="app-mark" src="/app-icon-v12.png" alt="">
       <div class="app-title">
-        <h1>My Recipes</h1>
-        <p class="tagline">Your recipes, available offline.</p>
+        <h1>Diane's Recipes</h1>
+        <p class="tagline">Diane's recipes, available offline.</p>
       </div>
       <div class="header-actions">
         <span id="status" class="status">Starting...</span>
+        <button id="settings-btn" class="button secondary" type="button">⚙ Settings</button>
         <button id="sync-btn" class="button secondary" type="button">Sync</button>
         <button id="import-btn" class="button secondary" type="button">Import</button>
         <button id="add-btn" class="button primary" type="button">+ Recipe</button>
@@ -61,16 +62,72 @@
     <div class="modal-card import-card">
       <button class="modal-close" type="button" data-close="import" aria-label="Close">×</button>
       <h2>Import from clipboard</h2>
-      <p class="import-help">Copy recipe text from a website or your notes, then paste it below.</p>
+      <p class="import-help">Copy recipe text from a website or your notes, then paste it below. A copied photo is attached automatically when the browser exposes it; otherwise choose one manually.</p>
       <label for="import-text">Recipe text</label>
       <textarea id="import-text" class="import-text" rows="12" placeholder="Paste the recipe here..."></textarea>
       <div class="import-actions">
         <button id="paste-btn" class="button secondary" type="button">Paste from clipboard</button>
+        <label class="button secondary file-button">
+          Choose photo
+          <input id="import-image-input" type="file" accept="image/*">
+        </label>
         <button id="parse-btn" class="button primary" type="button">Parse &amp; review</button>
       </div>
       <div class="import-photo">
-        <img id="import-image" src="/app-icon.png" alt="Pasted recipe photo" hidden>
+        <img id="import-image" src="/app-icon-v12.png" alt="Pasted recipe photo" hidden>
         <span id="import-image-status">No photo detected</span>
+      </div>
+      <label for="import-image-url">Image URL (optional)</label>
+      <div class="import-url-row">
+        <input id="import-image-url" type="url" placeholder="https://.../photo.jpg" autocomplete="off">
+        <button id="fetch-image-btn" class="button secondary" type="button">Add from URL</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="welcome" class="modal" hidden aria-label="Welcome">
+    <div class="modal-card settings-card">
+      <h2>What should we call you?</h2>
+      <p class="settings-help">Your name is used only for favorites marked “For Me”. No password needed.</p>
+      <label for="welcome-name">Name</label>
+      <input id="welcome-name" type="text" maxlength="80" autocomplete="name" placeholder="e.g. Diane">
+      <div class="modal-actions">
+        <button id="welcome-save" class="button primary" type="button">Continue</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings" class="modal" hidden aria-label="Settings">
+    <div class="modal-card settings-card">
+      <button class="modal-close" type="button" data-close="settings" aria-label="Close">×</button>
+      <h2>Settings</h2>
+      <label for="settings-name">Name</label>
+      <input id="settings-name" type="text" maxlength="80" autocomplete="name">
+      <p class="settings-help">Devices using the same name share “For Me” favorites. Changing your name keeps your favorites with the same recipes.</p>
+      <div class="modal-actions">
+        <button id="settings-save" class="button primary" type="button">Save</button>
+        <button class="button ghost" type="button" data-close="settings">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="favorite-dialog" class="modal" hidden aria-label="Favorite options">
+    <div class="modal-card favorite-card">
+      <button class="modal-close" type="button" data-close="favoriteDialog" aria-label="Close">×</button>
+      <h2>Favorite this recipe</h2>
+      <p id="favorite-recipe-title" class="settings-help"></p>
+      <div class="favorite-options">
+        <div class="favorite-option">
+          <span>Everyone</span>
+          <button id="favorite-global" class="button secondary" type="button" aria-pressed="false">Off</button>
+        </div>
+        <div class="favorite-option">
+          <span>For Me</span>
+          <button id="favorite-me" class="button secondary" type="button" aria-pressed="false">Off</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="favorite-done" class="button primary" type="button">Done</button>
       </div>
     </div>
   </section>
@@ -78,7 +135,7 @@
   <section id="detail" class="modal" hidden aria-label="Recipe details">
     <div class="modal-card detail-card">
       <button class="modal-close" type="button" data-close="detail" aria-label="Close">×</button>
-      <img id="detail-image" class="detail-image" src="/app-icon.png" alt="">
+      <img id="detail-image" class="detail-image" src="/app-icon-v12.png" alt="">
       <h2 id="detail-title"></h2>
       <p id="detail-description" class="detail-description"></p>
       <div id="detail-meta" class="detail-meta"></div>
@@ -88,6 +145,7 @@
       <ol id="detail-directions" class="detail-list"></ol>
       <p id="detail-notes" class="detail-notes" hidden></p>
       <div class="modal-actions">
+        <button id="detail-share" class="button secondary" type="button">Share</button>
         <button id="detail-edit" class="button primary" type="button">Edit</button>
         <button id="detail-delete" class="button danger" type="button">Delete</button>
       </div>
@@ -103,20 +161,21 @@
         <label>Description<textarea id="field-description" name="description" rows="2"></textarea></label>
         <div class="field-row">
           <label>Prep time<input id="field-prep" name="prepTime" placeholder="0:35"></label>
-          <label>Cook time<input id="field-cook" name="cookTime" placeholder="1:20"></label>
+          <label>Cook / total time<input id="field-cook" name="cookTime" placeholder="10 minutes"></label>
           <label>Servings<input id="field-servings" name="servings" placeholder="8 servings"></label>
         </div>
         <label>Categories<input id="field-categories" name="categories" placeholder="beef, dinner"></label>
-        <label class="check-label">
-          <input id="field-favorite" name="favorite" type="checkbox">
-          Favorite
-        </label>
+        <div class="favorite-editor-row">
+          <span>Favorites</span>
+          <button id="editor-favorite-global" class="button secondary" type="button" aria-pressed="false">Everyone: Off</button>
+          <button id="editor-favorite-me" class="button secondary" type="button" aria-pressed="false">For Me: Off</button>
+        </div>
         <label>Ingredients<textarea id="field-ingredients" name="ingredients" rows="8" placeholder="One ingredient per line"></textarea></label>
         <label>Instructions<textarea id="field-directions" name="directions" rows="10" placeholder="One step per line"></textarea></label>
         <label>Notes<textarea id="field-notes" name="notes" rows="3" placeholder="Optional notes"></textarea></label>
         <label>Source URL<input id="field-url" name="sourceUrl" type="url" placeholder="https://..."></label>
         <div class="image-editor">
-          <img id="editor-image" src="/app-icon.png" alt="Recipe image preview">
+          <img id="editor-image" src="/app-icon-v12.png" alt="Recipe image preview">
           <div>
             <label class="button secondary file-button">
               Choose image
@@ -124,6 +183,11 @@
             </label>
             <button id="remove-image" class="button ghost" type="button">Remove image</button>
           </div>
+        </div>
+        <label for="editor-image-url">Image from URL (optional)</label>
+        <div class="image-url-row">
+          <input id="editor-image-url" type="url" placeholder="https://.../photo.jpg" autocomplete="off">
+          <button id="editor-fetch-image-btn" class="button secondary" type="button">Add from URL</button>
         </div>
         <div class="modal-actions">
           <button class="button primary" type="submit">Save</button>
@@ -134,8 +198,10 @@
   </section>
 
   <script src="/idb.js"></script>
+  <script src="/favorites.js"></script>
   <script src="/sync.js"></script>
   <script src="/import.js"></script>
+  <script src="/share.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

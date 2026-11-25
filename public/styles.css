@@ -450,6 +450,30 @@ h1 {
   background: var(--accent-soft);
 }
 
+.import-card > label[for="import-image-url"],
+#recipe-form > label[for="editor-image-url"] {
+  margin-top: 14px;
+}
+
+.import-url-row,
+.image-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.import-url-row input,
+.image-url-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -525,6 +549,61 @@ h1 {
 
 .file-button input {
   display: none;
+}
+
+.settings-card {
+  width: min(520px, 100%);
+}
+
+.settings-card input,
+.favorite-card input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+
+.settings-help {
+  margin: 8px 0 16px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.favorite-card {
+  width: min(480px, 100%);
+}
+
+.favorite-options {
+  display: grid;
+  gap: 10px;
+}
+
+.favorite-option,
+.favorite-editor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.favorite-option span,
+.favorite-editor-row span {
+  font-weight: 650;
+}
+
+.favorite-option button[aria-pressed="true"],
+.favorite-editor-row button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 @media (max-width: 720px) {

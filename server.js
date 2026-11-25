@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { openDatabase } = require('./src/db');
 const recipeStore = require('./src/recipes');
+const favoriteStore = require('./src/favorites');
 
 const app = express();
 const db = openDatabase();
@@ -39,7 +40,7 @@ app.use(express.static(PUBLIC_DIR, {
   etag: true,
   lastModified: true,
   setHeaders(res, filePath) {
-    if (/\.(?:html|js|css|webmanifest)$/i.test(filePath)) {
+    if (/\.(?:html|js|css|webmanifest|png|svg)$/i.test(filePath)) {
       res.setHeader('Cache-Control', 'no-cache');
       if (/sw\.js$/i.test(filePath)) {
         res.setHeader('Service-Worker-Allowed', '/');
@@ -52,12 +53,85 @@ app.use(express.static(PUBLIC_DIR, {
 
 app.get('/api/health', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, name: 'My Recipes' });
+  res.json({ ok: true, name: "Diane's Recipes" });
 });
 
 app.get('/api/config', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({ authRequired: Boolean(SYNC_TOKEN) });
+});
+
+function isImageMime(value) {
+  return String(value || '').toLowerCase().startsWith('image/');
+}
+
+function isPrivateImageHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '::1') return true;
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true;
+  if (/^fe80:/i.test(host)) return true;
+
+  const private172 = host.match(/^172\.(\d+)\./);
+  if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return true;
+
+  return false;
+}
+
+app.get('/api/fetch-image', async (req, res) => {
+  const rawUrl = String(req.query.url || '').trim();
+  if (!rawUrl) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(400).json({ error: 'Image URL is required.' });
+  }
+
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    res.set('Cache-Control', 'no-store');
+    return res.status(400).json({ error: 'Enter a valid image URL.' });
+  }
+
+  if (!['http:', 'https:'].includes(target.protocol)) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(400).json({ error: 'Only http and https image URLs are supported.' });
+  }
+
+  if (isPrivateImageHost(target.hostname)) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(400).json({ error: 'Private or local image URLs are not allowed.' });
+  }
+
+  try {
+    const response = await fetch(target, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'User-Agent': "Diane's Recipes image fetch"
+      }
+    });
+
+    if (!response.ok) throw new Error(`Remote server returned ${response.status}.`);
+
+    const mime = String(response.headers.get('content-type') || '').split(';')[0].trim();
+    if (!isImageMime(mime)) throw new Error('The URL did not return an image.');
+
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > 10 * 1024 * 1024) throw new Error('Image is too large. The limit is 10 MB.');
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length) throw new Error('The image was empty.');
+    if (bytes.length > 10 * 1024 * 1024) throw new Error('Image is too large. The limit is 10 MB.');
+
+    res.set('Cache-Control', 'no-store');
+    res.type(mime || 'image/jpeg');
+    return res.send(bytes);
+  } catch (err) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(400).json({ error: `Could not fetch image: ${err.message}` });
+  }
 });
 
 function extensionForMime(mime) {
@@ -176,6 +250,50 @@ app.get('/api/sync/pull', (req, res) => {
   }
 });
 
+app.get('/api/favorites/pull', (req, res) => {
+  try {
+    const result = favoriteStore.listFavorites(db, {
+      cursor: req.query.cursor,
+      limit: req.query.limit,
+      userKey: req.query.userKey
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err) {
+    res.set('Cache-Control', 'no-store');
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/favorites/push', (req, res) => {
+  const mutations = Array.isArray(req.body && req.body.mutations) ? req.body.mutations : [];
+  const results = mutations.map((mutation) => {
+    const mutationId = mutation && (mutation.id || mutation.mutationId);
+    try {
+      return {
+        mutationId,
+        ...favoriteStore.applyFavoriteMutation(db, mutation || {})
+      };
+    } catch (err) {
+      return { mutationId, status: 'error', error: err.message };
+    }
+  });
+
+  res.set('Cache-Control', 'no-store');
+  res.json({ results, serverTime: new Date().toISOString() });
+});
+
+app.post('/api/favorites/rename', (req, res) => {
+  try {
+    const result = favoriteStore.renameUser(db, req.body || {});
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err) {
+    res.set('Cache-Control', 'no-store');
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/recipes', (req, res) => {
   const result = recipeStore.listRecipes(db, {
     cursor: req.query.cursor,
@@ -203,6 +321,22 @@ function resolveServerId(mutation) {
     if (row) return row.server_id;
   }
   return null;
+}
+
+function applyLegacyFavorite(mutation, recipeClientId) {
+  const payload = mutation && mutation.payload;
+  if (!payload || !recipeClientId) return;
+  if (payload.favoriteScope === 'separate') return;
+  if (!Object.prototype.hasOwnProperty.call(payload, 'favorite')) return;
+
+  favoriteStore.applyFavoriteMutation(db, {
+    clientId: `legacy:${recipeClientId}`,
+    mutationId: `legacy:${mutation.id || mutation.mutationId}`,
+    recipeId: recipeClientId,
+    scope: 'global',
+    favorite: payload.favorite ? 1 : 0,
+    updatedAt: mutation.updatedAt
+  });
 }
 
 function applyMutation(mutation) {
@@ -237,6 +371,7 @@ function applyMutation(mutation) {
         clientId: mutation.entityId,
         mutationId
       });
+      if (result.recipe) applyLegacyFavorite(mutation, result.recipe.clientId);
       if (result.conflict === 'clientId') {
         return { status: 'exists', recipe: result.recipe };
       }
@@ -254,6 +389,7 @@ function applyMutation(mutation) {
       if (result.error === 'conflict') return { status: 'conflict', recipe: result.recipe };
       if (result.error === 'notFound') return { status: 'error', error: 'Recipe not found.' };
       if (result.error === 'deleted') return { status: 'deleted', recipe: result.recipe };
+      applyLegacyFavorite(mutation, result.recipe && result.recipe.clientId);
       return { status: 'ok', recipe: result.recipe };
     }
 
@@ -264,6 +400,9 @@ function applyMutation(mutation) {
       });
       if (result.error === 'conflict') return { status: 'conflict', recipe: result.recipe };
       if (result.error === 'notFound') return { status: 'error', error: 'Recipe not found.' };
+      if (result.recipe && result.recipe.clientId) {
+        favoriteStore.removeFavoritesForRecipe(db, result.recipe.clientId);
+      }
       return { status: 'ok', recipe: result.recipe };
     }
 
@@ -344,5 +483,5 @@ app.get('*', (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`My Recipes running at http://localhost:${PORT}`);
+  console.log(`Diane's Recipes running at http://localhost:${PORT}`);
 });

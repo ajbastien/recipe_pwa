@@ -1,4 +1,4 @@
-# My Recipes data model
+# Diane's Recipes data model
 
 This project uses the Flutter app only as a structural reference.
 
