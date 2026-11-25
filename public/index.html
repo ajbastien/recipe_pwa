@@ -24,6 +24,7 @@
       <div class="header-actions">
         <span id="status" class="status">Starting...</span>
         <button id="sync-btn" class="button secondary" type="button">Sync</button>
+        <button id="import-btn" class="button secondary" type="button">Import</button>
         <button id="add-btn" class="button primary" type="button">+ Recipe</button>
       </div>
     </header>
@@ -55,6 +56,24 @@
       <span id="recipe-count">0 recipes</span>
     </footer>
   </div>
+
+  <section id="import" class="modal" hidden aria-label="Import recipe">
+    <div class="modal-card import-card">
+      <button class="modal-close" type="button" data-close="import" aria-label="Close">×</button>
+      <h2>Import from clipboard</h2>
+      <p class="import-help">Copy recipe text from a website or your notes, then paste it below.</p>
+      <label for="import-text">Recipe text</label>
+      <textarea id="import-text" class="import-text" rows="12" placeholder="Paste the recipe here..."></textarea>
+      <div class="import-actions">
+        <button id="paste-btn" class="button secondary" type="button">Paste from clipboard</button>
+        <button id="parse-btn" class="button primary" type="button">Parse &amp; review</button>
+      </div>
+      <div class="import-photo">
+        <img id="import-image" src="/app-icon.png" alt="Pasted recipe photo" hidden>
+        <span id="import-image-status">No photo detected</span>
+      </div>
+    </div>
+  </section>
 
   <section id="detail" class="modal" hidden aria-label="Recipe details">
     <div class="modal-card detail-card">
@@ -94,6 +113,7 @@
         </label>
         <label>Ingredients<textarea id="field-ingredients" name="ingredients" rows="8" placeholder="One ingredient per line"></textarea></label>
         <label>Instructions<textarea id="field-directions" name="directions" rows="10" placeholder="One step per line"></textarea></label>
+        <label>Notes<textarea id="field-notes" name="notes" rows="3" placeholder="Optional notes"></textarea></label>
         <label>Source URL<input id="field-url" name="sourceUrl" type="url" placeholder="https://..."></label>
         <div class="image-editor">
           <img id="editor-image" src="/app-icon.png" alt="Recipe image preview">
@@ -115,6 +135,7 @@
 
   <script src="/idb.js"></script>
   <script src="/sync.js"></script>
+  <script src="/import.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

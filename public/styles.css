@@ -396,6 +396,60 @@ h1 {
   background: var(--accent-soft);
 }
 
+.import-card {
+  width: min(680px, 100%);
+}
+
+.import-help {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+#import-form label,
+.import-card > label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 650;
+}
+
+.import-text {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  font: inherit;
+  line-height: 1.45;
+  background: #fff;
+  color: var(--ink);
+  resize: vertical;
+}
+
+.import-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.import-photo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.import-photo img {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
 .modal-actions {
   display: flex;
   gap: 10px;

@@ -30,12 +30,34 @@ If `SYNC_TOKEN` is set, enter it in the PWA toolbar under **Sync token**.
 - Recipe detail view with ingredients, instructions, metadata, and source URL.
 - Add/edit/delete recipes with image selection from the device.
 - Favorite toggle that queues a sync mutation.
+- Clipboard import for website/Notes recipe text, with optional pasted photo and review before saving.
 - IndexedDB local store for recipes, images, outbox, settings, and sync state.
 - Service worker app-shell caching and on-demand image caching.
 - Outbox-based push with idempotency keys and conflict detection.
 - Cursor-based pull with server revisions and delete tombstones.
 - Image upload by content hash.
 - Optional bearer-token authentication.
+
+## Clipboard import
+
+Tap **Import** in the toolbar. Copy recipe text from a website or Apple Notes, then either tap **Paste from clipboard** or long-press the text box and paste normally.
+
+The parser detects:
+
+```text
+title, description, ingredients, instructions, notes
+prep time, cook time, servings, categories, source URL
+```
+
+A copied image from the clipboard is attached if the browser exposes it. On iOS, manual paste into the text box is the most reliable path for both text and photos.
+
+Parsed values open in the normal editor for review. Nothing is saved until you tap **Save**, and imported recipes use the same offline outbox and sync flow as manually entered recipes.
+
+Parser tests:
+
+```bash
+npm test
+```
 
 ## Data migration
 

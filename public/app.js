@@ -8,7 +8,8 @@ const state = {
   editingId: null,
   detailId: null,
   pendingImage: null,
-  pendingImageRemoved: false
+  pendingImageRemoved: false,
+  importImage: null
 };
 
 const elements = {
@@ -20,7 +21,14 @@ const elements = {
   sort: document.getElementById('sort'),
   categoryFilters: document.getElementById('category-filters'),
   syncButton: document.getElementById('sync-btn'),
+  importButton: document.getElementById('import-btn'),
   addButton: document.getElementById('add-btn'),
+  import: document.getElementById('import'),
+  importText: document.getElementById('import-text'),
+  pasteButton: document.getElementById('paste-btn'),
+  parseButton: document.getElementById('parse-btn'),
+  importImage: document.getElementById('import-image'),
+  importImageStatus: document.getElementById('import-image-status'),
   detail: document.getElementById('detail'),
   detailImage: document.getElementById('detail-image'),
   detailTitle: document.getElementById('detail-title'),
@@ -280,21 +288,23 @@ async function sha256Blob(blob) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+async function setPendingImage(blob, mime) {
+  if (!blob || !blob.size) return;
+
+  state.pendingImage = {
+    imageId: await sha256Blob(blob),
+    blob,
+    mime: mime || blob.type || 'image/jpeg',
+    size: blob.size
+  };
+  state.pendingImageRemoved = false;
+  elements.editorImage.src = URL.createObjectURL(blob);
+}
+
 async function handleImageSelection(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-
-  const imageId = await sha256Blob(file);
-  state.pendingImage = {
-    imageId,
-    blob: file,
-    mime: file.type || 'image/jpeg',
-    size: file.size
-  };
-  state.pendingImageRemoved = false;
-
-  const previewUrl = URL.createObjectURL(file);
-  elements.editorImage.src = previewUrl;
+  await setPendingImage(file, file.type);
 }
 
 function openDetail(id) {
@@ -353,34 +363,157 @@ function openDetail(id) {
   elements.detail.hidden = false;
 }
 
-async function openEditor(id = null) {
+async function openEditor(id = null, options = {}) {
+  const draft = options.draft || null;
   state.editingId = id;
-  state.pendingImage = null;
+  state.pendingImage = options.pendingImage || null;
   state.pendingImageRemoved = false;
 
   const recipe = id ? await RecipeDB.get('recipes', id) : null;
-  elements.editorHeading.textContent = recipe ? 'Edit recipe' : 'New recipe';
+  const source = recipe || draft || {};
+  elements.editorHeading.textContent = recipe
+    ? 'Edit recipe'
+    : draft
+      ? 'Imported recipe — review before saving'
+      : 'New recipe';
   elements.form.reset();
-  elements.editorImage.src = recipe && recipe.imageId
-    ? `/api/images/${encodeURIComponent(recipe.imageId)}`
-    : '/app-icon.png';
+
+  if (state.pendingImage) {
+    elements.editorImage.src = URL.createObjectURL(state.pendingImage.blob);
+  } else if (source.imageId) {
+    elements.editorImage.src = `/api/images/${encodeURIComponent(source.imageId)}`;
+  } else {
+    elements.editorImage.src = '/app-icon.png';
+  }
   elements.editorImage.onerror = () => { elements.editorImage.src = '/app-icon.png'; };
 
-  document.getElementById('field-title').value = recipe ? recipe.title || '' : '';
-  document.getElementById('field-description').value = recipe ? recipe.description || '' : '';
-  document.getElementById('field-prep').value = recipe ? recipe.prepTime || '' : '';
-  document.getElementById('field-cook').value = recipe ? recipe.cookTime || '' : '';
-  document.getElementById('field-servings').value = recipe ? recipe.servings || '' : '';
-  document.getElementById('field-categories').value = recipe ? (recipe.categories || []).join(', ') : '';
-  document.getElementById('field-favorite').checked = Boolean(recipe && recipe.favorite);
-  document.getElementById('field-ingredients').value = recipe ? (recipe.ingredients || []).join('\n') : '';
-  document.getElementById('field-directions').value = recipe ? (recipe.directions || []).join('\n') : '';
-  document.getElementById('field-url').value = recipe ? recipe.sourceUrl || '' : '';
+  document.getElementById('field-title').value = source.title || '';
+  document.getElementById('field-description').value = source.description || '';
+  document.getElementById('field-prep').value = source.prepTime || '';
+  document.getElementById('field-cook').value = source.cookTime || '';
+  document.getElementById('field-servings').value = source.servings || '';
+  document.getElementById('field-categories').value = (source.categories || []).join(', ');
+  document.getElementById('field-favorite').checked = Boolean(source.favorite);
+  document.getElementById('field-ingredients').value = (source.ingredients || []).join('\n');
+  document.getElementById('field-directions').value = (source.directions || []).join('\n');
+  document.getElementById('field-notes').value = source.notes || '';
+  document.getElementById('field-url').value = source.sourceUrl || '';
   elements.imageInput.value = '';
 
   elements.detail.hidden = true;
+  elements.import.hidden = true;
   elements.editor.hidden = false;
   document.getElementById('field-title').focus();
+}
+
+function importSummary(parsed, hasPhoto) {
+  const parts = [];
+  if (parsed.ingredients && parsed.ingredients.length) {
+    parts.push(`${parsed.ingredients.length} ingredients`);
+  }
+  if (parsed.directions && parsed.directions.length) {
+    parts.push(`${parsed.directions.length} steps`);
+  }
+  if (hasPhoto) parts.push('photo');
+  return parts.length ? parts.join(', ') : 'title only';
+}
+
+function openImport() {
+  state.importImage = null;
+  elements.importText.value = '';
+  elements.importImage.hidden = true;
+  elements.importImage.src = '/app-icon.png';
+  elements.importImageStatus.textContent = 'No photo detected';
+  elements.detail.hidden = true;
+  elements.editor.hidden = true;
+  elements.import.hidden = false;
+  elements.importText.focus();
+}
+
+async function setImportImage(blob, mime) {
+  if (!blob || !blob.size) return;
+
+  state.importImage = {
+    imageId: await sha256Blob(blob),
+    blob,
+    mime: mime || blob.type || 'image/jpeg',
+    size: blob.size
+  };
+
+  elements.importImage.src = URL.createObjectURL(blob);
+  elements.importImage.hidden = false;
+  const size = blob.size >= 1024 * 1024
+    ? `${(blob.size / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+  elements.importImageStatus.textContent = `Photo ready (${size})`;
+}
+
+async function pasteFromClipboard() {
+  let textPasted = false;
+
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      elements.importText.value = text;
+      textPasted = true;
+    }
+  } catch {}
+
+  setStatus(
+    textPasted
+      ? 'Clipboard text pasted.'
+      : 'Clipboard text unavailable. Tap the text box and paste manually.',
+    !textPasted
+  );
+
+  if (navigator.clipboard && navigator.clipboard.read && typeof window.ClipboardItem !== 'undefined') {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = (item.types || []).find((type) => String(type).startsWith('image/'));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        await setImportImage(blob, imageType);
+        break;
+      }
+    } catch {}
+  }
+}
+
+async function handleImportPaste(event) {
+  const items = event.clipboardData && event.clipboardData.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.kind === 'file' && String(item.type).startsWith('image/')) {
+      const file = item.getAsFile();
+      if (file) await setImportImage(file, file.type || item.type);
+    }
+  }
+}
+
+async function parseImport() {
+  const text = elements.importText.value.trim();
+  if (!text) {
+    setStatus('Paste a recipe first.', true);
+    return;
+  }
+
+  const parsed = RecipeImport.parseRecipeText(text);
+  if (!parsed.title) {
+    setStatus('No title found. Add a title line and try again.', true);
+    return;
+  }
+
+  const photoReady = Boolean(state.importImage);
+  await openEditor(null, { draft: parsed, pendingImage: state.importImage });
+
+  state.importImage = null;
+  elements.importText.value = '';
+  elements.importImage.hidden = true;
+  elements.importImage.src = '/app-icon.png';
+  elements.importImageStatus.textContent = 'No photo detected';
+  setStatus(`Imported: ${importSummary(parsed, photoReady)}. Review before saving.`);
 }
 
 async function saveRecipe(event) {
@@ -436,7 +569,7 @@ async function saveRecipe(event) {
     servings: String(data.get('servings') || ''),
     favorite: Boolean(data.get('favorite')),
     rating: existing ? existing.rating || 0 : 0,
-    notes: existing ? existing.notes || '' : '',
+    notes: String(data.get('notes') || ''),
     ingredients: splitLines(data.get('ingredients')),
     directions: splitLines(data.get('directions')),
     categories: splitCategories(data.get('categories')),
@@ -510,6 +643,10 @@ async function runSync() {
 
 function bindEvents() {
   elements.syncButton.addEventListener('click', runSync);
+  elements.importButton.addEventListener('click', openImport);
+  elements.pasteButton.addEventListener('click', pasteFromClipboard);
+  elements.parseButton.addEventListener('click', parseImport);
+  elements.importText.addEventListener('paste', handleImportPaste);
   elements.addButton.addEventListener('click', () => openEditor());
 
   elements.search.addEventListener('input', () => {
