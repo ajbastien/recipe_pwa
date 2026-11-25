@@ -9,7 +9,8 @@ const state = {
   detailId: null,
   pendingImage: null,
   pendingImageRemoved: false,
-  importImage: null
+  importImage: null,
+  localImageUrls: new Map()
 };
 
 const elements = {
@@ -100,14 +101,35 @@ async function loadConfig() {
   }
 }
 
+async function refreshLocalImageUrls() {
+  for (const url of state.localImageUrls.values()) URL.revokeObjectURL(url);
+  state.localImageUrls.clear();
+
+  const images = await RecipeDB.getAll('images');
+  for (const record of images) {
+    if (record.imageId && record.blob) {
+      state.localImageUrls.set(record.imageId, URL.createObjectURL(record.blob));
+    }
+  }
+}
+
+function imageUrlFor(imageId) {
+  if (!imageId) return '/app-icon.png';
+  return state.localImageUrls.get(imageId)
+    || `/api/images/${encodeURIComponent(imageId)}`;
+}
+
 async function loadRecipes() {
   const all = await RecipeDB.getAll('recipes');
+  await refreshLocalImageUrls();
+
   state.allRecipes = all.filter((recipe) => !recipe.deleted);
   state.categories = new Set(
     state.allRecipes.flatMap((recipe) => recipe.categories || [])
   );
   state.categories.delete('');
 
+  if (!elements.detail.hidden && state.detailId) openDetail(state.detailId);
   buildCategoryFilters();
   applyFilters();
 }
@@ -203,7 +225,7 @@ function renderGrid() {
 
     const image = document.createElement('img');
     image.className = 'recipe-image';
-    image.src = recipe.imageId ? `/api/images/${encodeURIComponent(recipe.imageId)}` : '/app-icon.png';
+    image.src = imageUrlFor(recipe.imageId);
     image.alt = '';
     image.loading = 'lazy';
     image.onerror = () => { image.src = '/app-icon.png'; };
@@ -312,9 +334,7 @@ function openDetail(id) {
   if (!recipe) return;
 
   state.detailId = id;
-  elements.detailImage.src = recipe.imageId
-    ? `/api/images/${encodeURIComponent(recipe.imageId)}`
-    : '/app-icon.png';
+  elements.detailImage.src = imageUrlFor(recipe.imageId);
   elements.detailImage.onerror = () => { elements.detailImage.src = '/app-icon.png'; };
   elements.detailTitle.textContent = recipe.title || 'Untitled recipe';
   elements.detailDescription.textContent = recipe.description || '';
@@ -380,6 +400,8 @@ async function openEditor(id = null, options = {}) {
 
   if (state.pendingImage) {
     elements.editorImage.src = URL.createObjectURL(state.pendingImage.blob);
+  } else if (source.imageId && state.localImageUrls.has(source.imageId)) {
+    elements.editorImage.src = state.localImageUrls.get(source.imageId);
   } else if (source.imageId) {
     elements.editorImage.src = `/api/images/${encodeURIComponent(source.imageId)}`;
   } else {
