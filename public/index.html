@@ -25,6 +25,7 @@
         <span id="status" class="status">Starting...</span>
         <button id="settings-btn" class="button secondary" type="button">⚙ Settings</button>
         <button id="sync-btn" class="button secondary" type="button">Sync</button>
+        <button id="dedupe-btn" class="button secondary" type="button">Find duplicates</button>
         <button id="import-btn" class="button secondary" type="button">Import</button>
         <button id="add-btn" class="button primary" type="button">+ Recipe</button>
       </div>
@@ -81,6 +82,46 @@
       <div class="import-url-row">
         <input id="import-image-url" type="url" placeholder="https://.../photo.jpg" autocomplete="off">
         <button id="fetch-image-btn" class="button secondary" type="button">Add from URL</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="duplicates" class="modal" hidden aria-label="Possible duplicate recipes">
+    <div class="modal-card dedupe-card">
+      <button class="modal-close" type="button" data-close="duplicates" aria-label="Close">×</button>
+      <h2>Possible duplicate recipes</h2>
+      <p id="duplicates-summary" class="dedupe-help"></p>
+      <div id="duplicates-list" class="duplicates-list"></div>
+      <div class="modal-actions">
+        <button id="clear-duplicate-ignores" class="button ghost" type="button">Clear ignored pairs</button>
+        <button class="button secondary" type="button" data-close="duplicates">Close</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare" class="modal" hidden aria-label="Compare recipes">
+    <div class="modal-card compare-card">
+      <button class="modal-close" type="button" data-close="compare" aria-label="Close">×</button>
+      <h2>Compare recipes</h2>
+      <p id="compare-summary" class="dedupe-help"></p>
+      <p id="compare-reasons" class="dedupe-reasons"></p>
+      <div id="compare-grid" class="compare-grid"></div>
+      <div class="modal-actions">
+        <button id="compare-merge-a" class="button primary" type="button">Merge into A</button>
+        <button id="compare-merge-b" class="button primary" type="button">Merge into B</button>
+        <button id="compare-cancel" class="button ghost" type="button">Back to results</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="message-box" class="modal message-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="message-box-title" aria-describedby="message-box-detail">
+    <div id="message-box-card" class="modal-card message-card" data-tone="warning">
+      <span id="message-box-icon" class="message-icon" aria-hidden="true">?</span>
+      <h2 id="message-box-title"></h2>
+      <p id="message-box-detail" class="message-detail"></p>
+      <div class="modal-actions message-actions">
+        <button id="message-box-secondary" class="button message-dismiss message-default" type="button">No</button>
+        <button id="message-box-primary" class="button message-affirm" type="button">Yes</button>
       </div>
     </div>
   </section>
@@ -202,6 +243,7 @@
   <script src="/sync.js"></script>
   <script src="/import.js"></script>
   <script src="/share.js"></script>
+  <script src="/dedupe.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

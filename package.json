@@ -15,8 +15,8 @@
     "db:import": "node --experimental-sqlite scripts/import-export.js",
     "merge:exports": "node scripts/merge-exports.js",
     "combine:devices": "node scripts/combine-device-exports.js",
-    "test": "node --experimental-sqlite --test tests/import.test.js tests/favorites.test.js tests/share.test.js",
-    "check": "node --check server.js && node --check src/db.js && node --check src/recipes.js && node --check src/favorites.js && node --check scripts/init-db.js && node --check scripts/export-flutter-db.js && node --check scripts/import-export.js && node --check scripts/merge-exports.js && node --check scripts/combine-device-exports.js && node --check public/app.js && node --check public/sw.js && node --check public/idb.js && node --check public/favorites.js && node --check public/sync.js && node --check public/import.js && node --check public/share.js && npm test"
+    "test": "node --experimental-sqlite --test tests/import.test.js tests/favorites.test.js tests/share.test.js tests/dedupe.test.js",
+    "check": "node --check server.js && node --check src/db.js && node --check src/recipes.js && node --check src/favorites.js && node --check scripts/init-db.js && node --check scripts/export-flutter-db.js && node --check scripts/import-export.js && node --check scripts/merge-exports.js && node --check scripts/combine-device-exports.js && node --check public/app.js && node --check public/sw.js && node --check public/idb.js && node --check public/favorites.js && node --check public/sync.js && node --check public/import.js && node --check public/share.js && node --check public/dedupe.js && npm test"
   },
   "dependencies": {
     "express": "^4.21.2"

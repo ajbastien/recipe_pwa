@@ -1,4 +1,4 @@
-const CACHE_NAME = 'my-recipes-v14';
+const CACHE_NAME = 'my-recipes-v19';
 
 const APP_SHELL = [
   '/',
@@ -10,6 +10,7 @@ const APP_SHELL = [
   '/sync.js',
   '/import.js',
   '/share.js',
+  '/dedupe.js',
   '/favicon-v12.svg',
   '/app-icon-v12.png',
   '/app-icon-192-v12.png',

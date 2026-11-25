@@ -16,13 +16,19 @@ const state = {
   userName: '',
   userKey: '',
   favoriteDialogId: null,
-  editorFavorites: { globalFavorite: false, myFavorite: false }
+  editorFavorites: { globalFavorite: false, myFavorite: false },
+  duplicates: [],
+  dismissedDuplicates: [],
+  comparePair: null,
+  compareSelections: {}
 };
 
 const AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_SYNC_MIN_GAP_MS = 30 * 1000;
 let syncInFlight = false;
 let lastAutoSyncAt = 0;
+let messageBoxResolver = null;
+let messageBoxPreviousFocus = null;
 
 const elements = {
   status: document.getElementById('status'),
@@ -34,8 +40,27 @@ const elements = {
   categoryFilters: document.getElementById('category-filters'),
   settingsButton: document.getElementById('settings-btn'),
   syncButton: document.getElementById('sync-btn'),
+  dedupeButton: document.getElementById('dedupe-btn'),
   importButton: document.getElementById('import-btn'),
   addButton: document.getElementById('add-btn'),
+  duplicates: document.getElementById('duplicates'),
+  duplicatesSummary: document.getElementById('duplicates-summary'),
+  duplicatesList: document.getElementById('duplicates-list'),
+  clearDuplicateIgnores: document.getElementById('clear-duplicate-ignores'),
+  compare: document.getElementById('compare'),
+  compareSummary: document.getElementById('compare-summary'),
+  compareReasons: document.getElementById('compare-reasons'),
+  compareGrid: document.getElementById('compare-grid'),
+  compareMergeA: document.getElementById('compare-merge-a'),
+  compareMergeB: document.getElementById('compare-merge-b'),
+  compareCancel: document.getElementById('compare-cancel'),
+  messageBox: document.getElementById('message-box'),
+  messageBoxCard: document.getElementById('message-box-card'),
+  messageBoxIcon: document.getElementById('message-box-icon'),
+  messageBoxTitle: document.getElementById('message-box-title'),
+  messageBoxDetail: document.getElementById('message-box-detail'),
+  messageBoxPrimary: document.getElementById('message-box-primary'),
+  messageBoxSecondary: document.getElementById('message-box-secondary'),
   import: document.getElementById('import'),
   importText: document.getElementById('import-text'),
   pasteButton: document.getElementById('paste-btn'),
@@ -89,6 +114,59 @@ function setStatus(message, isError = false) {
   if (!elements.status) return;
   elements.status.textContent = message;
   elements.status.classList.toggle('error', Boolean(isError));
+}
+
+function messageBoxLabels(buttons) {
+  if (buttons === 'yesNo') return { primary: 'Yes', secondary: 'No' };
+  return { primary: 'OK', secondary: 'Cancel' };
+}
+
+function openMessageBox(options = {}) {
+  if (messageBoxResolver) closeMessageBox(false);
+
+  const buttons = options.buttons === 'yesNo' ? 'yesNo' : 'okCancel';
+  const labels = messageBoxLabels(buttons);
+  const tone = ['danger', 'warning', 'info'].includes(options.tone) ? options.tone : 'warning';
+  const icons = { danger: '!', warning: '?', info: 'i' };
+
+  return new Promise((resolve) => {
+    messageBoxResolver = resolve;
+    messageBoxPreviousFocus = document.activeElement;
+
+    elements.messageBoxCard.dataset.tone = tone;
+    elements.messageBoxIcon.textContent = icons[tone];
+    elements.messageBoxTitle.textContent = options.title || 'Please confirm';
+    elements.messageBoxDetail.textContent = options.detail || options.message || '';
+    elements.messageBoxPrimary.textContent = options.primaryLabel || labels.primary;
+    elements.messageBoxSecondary.textContent = options.secondaryLabel || labels.secondary;
+    elements.messageBoxPrimary.className = 'button message-affirm';
+    elements.messageBoxSecondary.className = 'button message-dismiss message-default';
+    elements.messageBox.hidden = false;
+
+    elements.messageBoxSecondary.focus();
+  });
+}
+
+function closeMessageBox(result) {
+  if (!messageBoxResolver) return;
+
+  const resolve = messageBoxResolver;
+  messageBoxResolver = null;
+  elements.messageBox.hidden = true;
+
+  if (messageBoxPreviousFocus && document.contains(messageBoxPreviousFocus)) {
+    messageBoxPreviousFocus.focus();
+  }
+  messageBoxPreviousFocus = null;
+  resolve(Boolean(result));
+}
+
+function askYesNo(title, detail, options = {}) {
+  return openMessageBox({ ...options, buttons: 'yesNo', title, detail });
+}
+
+function askOkCancel(title, detail, options = {}) {
+  return openMessageBox({ ...options, buttons: 'okCancel', title, detail });
 }
 
 function favoriteFor(recipe) {
@@ -1094,10 +1172,16 @@ async function saveRecipe(event) {
 async function deleteRecipe() {
   const id = state.detailId;
   if (!id) return;
-  if (!window.confirm('Delete this recipe? It will also be removed from other devices when synced.')) return;
 
   const recipe = await RecipeDB.get('recipes', id);
   if (!recipe) return;
+
+  const confirmed = await askYesNo(
+    'Delete recipe?',
+    `Delete "${recipe.title || 'Untitled recipe'}"? It will also be removed from other devices when synced.`,
+    { tone: 'danger', destructive: true }
+  );
+  if (!confirmed) return;
 
   const outbox = await RecipeDB.getAll('outbox');
   const pendingCreate = outbox.find((mutation) =>
@@ -1130,6 +1214,335 @@ async function deleteRecipe() {
   state.detailId = null;
   await loadRecipes();
   await syncAfterLocalChange('Recipe deleted');
+}
+
+function compareFields() {
+  return [
+    { key: 'title', label: 'Title' },
+    { key: 'description', label: 'Description' },
+    { key: 'prepTime', label: 'Prep time' },
+    { key: 'cookTime', label: 'Cook / total time' },
+    { key: 'servings', label: 'Servings' },
+    { key: 'imageId', label: 'Photo' },
+    { key: 'ingredients', label: 'Ingredients', both: true },
+    { key: 'directions', label: 'Instructions', both: true },
+    { key: 'notes', label: 'Notes', both: true },
+    { key: 'categories', label: 'Categories', both: true },
+    { key: 'sourceUrl', label: 'Source URL' }
+  ];
+}
+
+async function loadDismissedDuplicates() {
+  const value = await RecipeDB.getSetting('dismissedDuplicatePairs', []);
+  state.dismissedDuplicates = Array.isArray(value) ? value.map(String) : [];
+}
+
+function duplicatePairMeta(pair) {
+  return `${pair.score}% match · ${pair.confidence} confidence · ${pair.reasons.join(' · ')}`;
+}
+
+function renderDuplicates() {
+  if (!elements.duplicatesList) return;
+
+  elements.duplicatesList.innerHTML = '';
+  const pairCount = state.duplicates.reduce((total, group) => total + group.pairs.length, 0);
+
+  if (!pairCount) {
+    elements.duplicatesSummary.textContent = 'No likely duplicates found. Recipes with very different titles and ingredients are not shown.';
+    return;
+  }
+
+  elements.duplicatesSummary.textContent = `${pairCount} possible ${pairCount === 1 ? 'pair' : 'pairs'} in ${state.duplicates.length} ${state.duplicates.length === 1 ? 'group' : 'groups'}. Review each pair before merging.`;
+
+  for (const group of state.duplicates) {
+    const card = document.createElement('div');
+    card.className = 'duplicate-group';
+
+    const heading = document.createElement('h3');
+    heading.textContent = `${group.recipes.length} connected recipes`;
+    card.append(heading);
+
+    for (const pair of group.pairs) {
+      const row = document.createElement('div');
+      row.className = 'duplicate-pair';
+
+      const info = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = `${pair.a.title || 'Untitled recipe'} ↔ ${pair.b.title || 'Untitled recipe'}`;
+      const meta = document.createElement('p');
+      meta.className = 'duplicate-pair-meta';
+      meta.textContent = duplicatePairMeta(pair);
+      info.append(title, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'duplicate-pair-actions';
+
+      const compareButton = document.createElement('button');
+      compareButton.type = 'button';
+      compareButton.className = 'button primary';
+      compareButton.textContent = 'Compare & merge';
+      compareButton.addEventListener('click', () => openCompare(pair));
+
+      const ignoreButton = document.createElement('button');
+      ignoreButton.type = 'button';
+      ignoreButton.className = 'button ghost';
+      ignoreButton.textContent = 'Ignore';
+      ignoreButton.addEventListener('click', () => {
+        ignoreDuplicatePair(pair).catch((err) => setStatus(`Could not ignore pair: ${err.message}`, true));
+      });
+
+      actions.append(compareButton, ignoreButton);
+      row.append(info, actions);
+      card.append(row);
+    }
+
+    elements.duplicatesList.append(card);
+  }
+}
+
+async function openDuplicates() {
+  if (!elements.duplicates) return;
+
+  setStatus('Looking for possible duplicates...');
+  await loadDismissedDuplicates();
+  state.duplicates = RecipeDedupe.findDuplicates(state.allRecipes, {
+    dismissed: state.dismissedDuplicates
+  });
+
+  renderDuplicates();
+  elements.duplicates.hidden = false;
+
+  const pairCount = state.duplicates.reduce((total, group) => total + group.pairs.length, 0);
+  setStatus(pairCount
+    ? `Found ${pairCount} possible duplicate ${pairCount === 1 ? 'pair' : 'pairs'}.`
+    : 'No likely duplicates found.');
+}
+
+async function ignoreDuplicatePair(pair) {
+  if (!state.dismissedDuplicates.includes(pair.key)) {
+    state.dismissedDuplicates.push(pair.key);
+  }
+  await RecipeDB.setSetting('dismissedDuplicatePairs', state.dismissedDuplicates);
+  await openDuplicates();
+  setStatus('Duplicate pair ignored.');
+}
+
+async function clearIgnoredDuplicates() {
+  state.dismissedDuplicates = [];
+  await RecipeDB.setSetting('dismissedDuplicatePairs', state.dismissedDuplicates);
+  await openDuplicates();
+  setStatus('Ignored duplicate pairs cleared.');
+}
+
+function compareValue(recipe, field) {
+  const value = document.createElement('p');
+  value.className = 'compare-value';
+
+  if (field === 'imageId') {
+    if (!recipe.imageId) {
+      value.textContent = 'No photo';
+      return value;
+    }
+    const image = document.createElement('img');
+    image.src = imageUrlFor(recipe.imageId);
+    image.alt = '';
+    image.onerror = () => { image.src = '/app-icon-v12.png'; };
+    value.append(image);
+    return value;
+  }
+
+  const raw = recipe[field];
+  if (Array.isArray(raw)) {
+    value.textContent = raw.length ? raw.map((item) => `• ${item}`).join('\n') : 'Empty';
+  } else {
+    value.textContent = String(raw || '').trim() || 'Empty';
+  }
+  return value;
+}
+
+function renderCompare() {
+  if (!state.comparePair || !elements.compareGrid) return;
+
+  const pair = state.comparePair;
+  elements.compareSummary.textContent = `${pair.a.title || 'Untitled recipe'} compared with ${pair.b.title || 'Untitled recipe'}`;
+  elements.compareReasons.textContent = duplicatePairMeta(pair);
+  elements.compareGrid.innerHTML = '';
+
+  for (const field of compareFields()) {
+    const row = document.createElement('div');
+    row.className = 'compare-row';
+
+    const label = document.createElement('div');
+    label.className = 'compare-label';
+    label.textContent = field.label;
+    row.append(label);
+
+    for (const side of ['a', 'b']) {
+      const recipe = side === 'a' ? pair.a : pair.b;
+      const column = document.createElement('div');
+      column.className = 'compare-side';
+
+      const heading = document.createElement('h4');
+      heading.textContent = `${side.toUpperCase()} — ${recipe.title || 'Untitled recipe'}`;
+
+      const choices = document.createElement('div');
+      choices.className = 'compare-choices';
+      const options = field.both ? ['a', 'b', 'both'] : ['a', 'b'];
+
+      for (const choice of options) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = choice === 'both' ? 'Both' : choice.toUpperCase();
+        button.dataset.field = field.key;
+        button.dataset.choice = choice;
+        choices.append(button);
+      }
+
+      column.append(heading, compareValue(recipe, field.key), choices);
+      row.append(column);
+    }
+
+    elements.compareGrid.append(row);
+  }
+
+  updateCompareChoices();
+}
+
+function updateCompareChoices() {
+  if (!elements.compareGrid) return;
+  for (const button of elements.compareGrid.querySelectorAll('button[data-field][data-choice]')) {
+    const selected = state.compareSelections[button.dataset.field] === button.dataset.choice;
+    button.setAttribute('aria-pressed', String(selected));
+  }
+}
+
+function handleCompareChoice(event) {
+  const button = event.target.closest('button[data-field][data-choice]');
+  if (!button || !elements.compareGrid.contains(button)) return;
+  state.compareSelections[button.dataset.field] = button.dataset.choice;
+  updateCompareChoices();
+}
+
+function openCompare(pair) {
+  state.comparePair = pair;
+  state.compareSelections = RecipeDedupe.suggestSelections(pair.a, pair.b);
+  renderCompare();
+  if (elements.duplicates) elements.duplicates.hidden = true;
+  if (elements.compare) elements.compare.hidden = false;
+}
+
+function backToDuplicates() {
+  if (elements.compare) elements.compare.hidden = true;
+  if (elements.duplicates) elements.duplicates.hidden = false;
+  state.comparePair = null;
+}
+
+async function mergeDuplicateFavorites(keeper, other) {
+  const keeperRecord = await RecipeDB.get('favorites', keeper.id)
+    || RecipeFavorites.emptyFavorite(keeper.id);
+  const otherRecord = await RecipeDB.get('favorites', other.id)
+    || RecipeFavorites.emptyFavorite(other.id);
+  const union = RecipeDedupe.unionFavorites(keeperRecord, otherRecord);
+  union.recipeId = keeper.id;
+  union.updatedAt = nowIso();
+
+  if (union.globalFavorite || union.myFavorite) {
+    await RecipeDB.put('favorites', union);
+  }
+
+  for (const [scope, key] of [['global', 'globalFavorite'], ['me', 'myFavorite']]) {
+    if (Boolean(keeperRecord[key]) !== Boolean(union[key])) {
+      await queueFavoriteChange(keeper.id, scope, Boolean(union[key]));
+    }
+  }
+}
+
+async function removeDuplicateRecipe(recipe, keeperImageId) {
+  const timestamp = nowIso();
+  const outbox = await RecipeDB.getAll('outbox');
+  const recipeMutations = outbox.filter((mutation) =>
+    (mutation.entity === 'recipe' || ['create', 'update', 'delete'].includes(mutation.op))
+    && mutation.entityId === recipe.id
+  );
+  const pendingCreate = recipeMutations.some((mutation) => mutation.op === 'create');
+  const unsynced = pendingCreate || !recipe.serverId;
+
+  for (const mutation of recipeMutations) {
+    await RecipeDB.remove('outbox', mutation.id);
+  }
+
+  const favoriteOutbox = await RecipeDB.getAll('favoriteOutbox');
+  for (const mutation of favoriteOutbox) {
+    if (mutation.recipeId === recipe.id) await RecipeDB.remove('favoriteOutbox', mutation.id);
+  }
+  await RecipeDB.remove('favorites', recipe.id);
+
+  if (recipe.imageId && recipe.imageId !== keeperImageId) {
+    const imageMutations = outbox.filter((mutation) =>
+      (mutation.entity === 'image' || mutation.op === 'image')
+      && (mutation.entityId === recipe.imageId || (mutation.payload && mutation.payload.imageId === recipe.imageId))
+    );
+    for (const mutation of imageMutations) {
+      await RecipeDB.remove('outbox', mutation.id);
+    }
+  }
+
+  if (unsynced) {
+    await RecipeDB.remove('recipes', recipe.id);
+    return;
+  }
+
+  recipe.deleted = true;
+  recipe.deletedAt = timestamp;
+  recipe.updatedAt = timestamp;
+  recipe.dirty = true;
+  await RecipeDB.put('recipes', recipe);
+  await RecipeDB.addMutation({
+    id: SyncEngine.newId(),
+    entity: 'recipe',
+    entityId: recipe.id,
+    serverId: recipe.serverId,
+    op: 'delete',
+    payload: SyncEngine.toServerPayload(recipe),
+    baseRev: recipe.rev || 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    attempts: 0,
+    lastError: null
+  });
+}
+
+async function mergeDuplicatePair(keeperId) {
+  const pair = state.comparePair;
+  if (!pair) return;
+
+  const keeper = pair.a.id === keeperId ? pair.a : pair.b;
+  const other = pair.a.id === keeperId ? pair.b : pair.a;
+  const confirmed = await askOkCancel(
+    'Merge duplicate recipes?',
+    `Merge "${other.title || 'Untitled recipe'}" into "${keeper.title || 'Untitled recipe'}"?\n\nThe other recipe will be removed from this device and from other devices when synced. This cannot be undone.`,
+    { tone: 'warning', destructive: true }
+  );
+  if (!confirmed) return;
+
+  setStatus('Merging recipes...');
+  const plan = RecipeDedupe.buildMergePlan(pair.a, pair.b, state.compareSelections, keeperId);
+  const merged = RecipeDedupe.applyMergeMetadata(plan, nowIso());
+
+  if (plan.contentChanged) {
+    await RecipeDB.put('recipes', merged);
+    await enqueueRecipeMutation(merged, merged.serverId ? 'update' : 'create');
+  }
+
+  await mergeDuplicateFavorites(plan.keeper, plan.other);
+  await removeDuplicateRecipe(plan.other, merged.imageId);
+
+  if (elements.compare) elements.compare.hidden = true;
+  if (elements.duplicates) elements.duplicates.hidden = true;
+  state.comparePair = null;
+
+  await loadRecipes();
+  await syncAfterLocalChange('Recipes merged');
 }
 
 async function runSync() {
@@ -1235,6 +1648,24 @@ async function saveUserName(rawName, firstLaunch = false) {
 }
 
 function bindEvents() {
+  elements.messageBoxPrimary.addEventListener('click', () => closeMessageBox(true));
+  elements.messageBoxSecondary.addEventListener('click', () => closeMessageBox(false));
+  elements.messageBox.addEventListener('click', (event) => {
+    if (event.target === elements.messageBox) closeMessageBox(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (!messageBoxResolver) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMessageBox(false);
+      return;
+    }
+    if (event.key === 'Enter' && !event.target.closest('button')) {
+      event.preventDefault();
+      closeMessageBox(false);
+    }
+  });
+
   elements.syncButton.addEventListener('click', runSync);
   elements.settingsButton.addEventListener('click', openSettings);
   elements.welcomeSave.addEventListener('click', () => {
@@ -1271,6 +1702,28 @@ function bindEvents() {
     state.editorFavorites.myFavorite = !state.editorFavorites.myFavorite;
     updateEditorFavoriteButtons();
   });
+  elements.dedupeButton.addEventListener('click', () => {
+    openDuplicates().catch((err) => setStatus(`Could not find duplicates: ${err.message}`, true));
+  });
+  elements.clearDuplicateIgnores.addEventListener('click', () => {
+    clearIgnoredDuplicates().catch((err) => setStatus(`Could not clear ignored pairs: ${err.message}`, true));
+  });
+  elements.compareGrid.addEventListener('click', handleCompareChoice);
+  elements.compareMergeA.addEventListener('click', () => {
+    if (state.comparePair) {
+      mergeDuplicatePair(state.comparePair.a.id).catch((err) =>
+        setStatus(`Could not merge recipes: ${err.message}`, true)
+      );
+    }
+  });
+  elements.compareMergeB.addEventListener('click', () => {
+    if (state.comparePair) {
+      mergeDuplicatePair(state.comparePair.b.id).catch((err) =>
+        setStatus(`Could not merge recipes: ${err.message}`, true)
+      );
+    }
+  });
+  elements.compareCancel.addEventListener('click', backToDuplicates);
   elements.importButton.addEventListener('click', openImport);
   elements.pasteButton.addEventListener('click', pasteFromClipboard);
   elements.parseButton.addEventListener('click', parseImport);
