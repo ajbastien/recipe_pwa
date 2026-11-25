@@ -3,5 +3,6 @@ npm-debug.log*
 .env
 .env.*
 data/
+/diane.jpg
 .DS_Store
 Thumbs.db
