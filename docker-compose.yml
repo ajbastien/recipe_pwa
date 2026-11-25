@@ -1,0 +1,23 @@
+services:
+  my-recipes:
+    image: ghcr.io/ajbastien/recipe_pwa:latest
+    build: .
+    container_name: my-recipes
+    ports:
+      - "30002:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NODE_OPTIONS=--experimental-sqlite
+      # Uncomment to require a bearer token for sync/API access.
+      # - SYNC_TOKEN=change-me
+    volumes:
+      # Keep the server database and images outside the image.
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

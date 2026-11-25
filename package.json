@@ -1,0 +1,23 @@
+{
+  "name": "my-recipes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline-first recipe PWA built with Node.js.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:init": "node --experimental-sqlite scripts/init-db.js",
+    "export:legacy": "node --experimental-sqlite scripts/export-flutter-db.js",
+    "db:import": "node --experimental-sqlite scripts/import-export.js",
+    "merge:exports": "node scripts/merge-exports.js",
+    "combine:devices": "node scripts/combine-device-exports.js",
+    "check": "node --check server.js && node --check src/db.js && node --check src/recipes.js && node --check scripts/init-db.js && node --check scripts/export-flutter-db.js && node --check scripts/import-export.js && node --check scripts/merge-exports.js && node --check scripts/combine-device-exports.js && node --check public/app.js && node --check public/sw.js && node --check public/idb.js && node --check public/sync.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

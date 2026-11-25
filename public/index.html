@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Recipes</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" href="/app-icon.png">
+  <link rel="apple-touch-icon" href="/app-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#8f302e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="My Recipes">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <img class="app-mark" src="/app-icon.png" alt="">
+      <div class="app-title">
+        <h1>My Recipes</h1>
+        <p class="tagline">Your recipes, available offline.</p>
+      </div>
+      <div class="header-actions">
+        <span id="status" class="status">Starting...</span>
+        <button id="sync-btn" class="button secondary" type="button">Sync</button>
+        <button id="add-btn" class="button primary" type="button">+ Recipe</button>
+      </div>
+    </header>
+
+    <section class="toolbar" aria-label="Recipe tools">
+      <input id="search" class="search" type="search" placeholder="Search recipes" autocomplete="off">
+      <select id="sort" class="select" aria-label="Sort recipes">
+        <option value="title">Title A-Z</option>
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="favorites">Favorites first</option>
+      </select>
+      <details id="filter-panel" class="filter-panel">
+        <summary>Categories</summary>
+        <div id="category-filters" class="category-filters"></div>
+      </details>
+      <label id="token-field" class="token-field" hidden>
+        Sync token
+        <input id="sync-token" type="password" autocomplete="off" placeholder="Optional bearer token">
+      </label>
+    </section>
+
+    <main class="content">
+      <p id="empty" class="empty" hidden>No recipes match the current filters.</p>
+      <div id="grid" class="recipe-grid"></div>
+    </main>
+
+    <footer class="app-footer">
+      <span id="recipe-count">0 recipes</span>
+    </footer>
+  </div>
+
+  <section id="detail" class="modal" hidden aria-label="Recipe details">
+    <div class="modal-card detail-card">
+      <button class="modal-close" type="button" data-close="detail" aria-label="Close">×</button>
+      <img id="detail-image" class="detail-image" src="/app-icon.png" alt="">
+      <h2 id="detail-title"></h2>
+      <p id="detail-description" class="detail-description"></p>
+      <div id="detail-meta" class="detail-meta"></div>
+      <h3>Ingredients</h3>
+      <ul id="detail-ingredients" class="detail-list"></ul>
+      <h3>Instructions</h3>
+      <ol id="detail-directions" class="detail-list"></ol>
+      <p id="detail-notes" class="detail-notes" hidden></p>
+      <div class="modal-actions">
+        <button id="detail-edit" class="button primary" type="button">Edit</button>
+        <button id="detail-delete" class="button danger" type="button">Delete</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="editor" class="modal" hidden aria-label="Edit recipe">
+    <div class="modal-card editor-card">
+      <button class="modal-close" type="button" data-close="editor" aria-label="Close">×</button>
+      <h2 id="editor-heading">New recipe</h2>
+      <form id="recipe-form">
+        <label>Title<input id="field-title" name="title" required></label>
+        <label>Description<textarea id="field-description" name="description" rows="2"></textarea></label>
+        <div class="field-row">
+          <label>Prep time<input id="field-prep" name="prepTime" placeholder="0:35"></label>
+          <label>Cook time<input id="field-cook" name="cookTime" placeholder="1:20"></label>
+          <label>Servings<input id="field-servings" name="servings" placeholder="8 servings"></label>
+        </div>
+        <label>Categories<input id="field-categories" name="categories" placeholder="beef, dinner"></label>
+        <label class="check-label">
+          <input id="field-favorite" name="favorite" type="checkbox">
+          Favorite
+        </label>
+        <label>Ingredients<textarea id="field-ingredients" name="ingredients" rows="8" placeholder="One ingredient per line"></textarea></label>
+        <label>Instructions<textarea id="field-directions" name="directions" rows="10" placeholder="One step per line"></textarea></label>
+        <label>Source URL<input id="field-url" name="sourceUrl" type="url" placeholder="https://..."></label>
+        <div class="image-editor">
+          <img id="editor-image" src="/app-icon.png" alt="Recipe image preview">
+          <div>
+            <label class="button secondary file-button">
+              Choose image
+              <input id="field-image" type="file" accept="image/*">
+            </label>
+            <button id="remove-image" class="button ghost" type="button">Remove image</button>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="button primary" type="submit">Save</button>
+          <button class="button ghost" type="button" data-close="editor">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <script src="/idb.js"></script>
+  <script src="/sync.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
